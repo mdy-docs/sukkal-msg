@@ -18,15 +18,21 @@ For a broker, three subscribers and a publisher across five terminals —
 the [NATS hello-nats tutorial](https://docs.nats.io/tutorials/hello-nats)
 shape — see [demo/](demo/).
 
-There is a Node client in [packages/node/](packages/node/), which receives
-deliveries on an Express app:
+There are client libraries in [packages/](packages/), each receiving
+deliveries on the web framework its language reaches for:
 
 ```js
-import { Client } from 'bjmsg';
-
+// packages/node — Express
 const bjmsg = new Client({ url: 'http://127.0.0.1:8080' });
 await bjmsg.subscribe('orders.>', (msg) => console.log(msg.subject, msg.value));
 await bjmsg.publish('orders.new', { id: 1 });
+```
+
+```python
+# packages/python — Flask
+with Client("http://127.0.0.1:8080") as bjmsg:
+    bjmsg.subscribe("orders.>", lambda msg: print(msg.subject, msg.value))
+    bjmsg.publish("orders.new", {"id": 1})
 ```
 
 ## How it is built

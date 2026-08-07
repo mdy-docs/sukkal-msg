@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bjmsg"
+version = "0.2.0"
+description = "Python client for bjmsg — publish/subscribe over HTTP/1.1 with binjson payloads, pushed to a Flask callback"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "BSD-2-Clause" }
+keywords = ["pubsub", "messaging", "binjson", "webhook", "queue", "flask"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Networking",
+]
+# binjson is implemented here rather than depended on: the format is a
+# short, frozen spec (third_party/binjson/FORMAT.md) and a pure-Python
+# codec has no dependencies at all.
+dependencies = ["flask>=2.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["bjmsg*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
