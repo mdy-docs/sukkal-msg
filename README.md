@@ -87,6 +87,7 @@ bare `curl` against a broken request is readable.
 | `POST /take/<subject>` | `?group=&max=&lease=` | ARRAY of `{ index, attempts, expires_ms, payload }` |
 | `POST /done/<subject>` | `?group=&index=` | `{ subject, group, index, held }` |
 | `POST /fail/<subject>` | `?group=&index=[&delay=]` | `{ …, held, retry_in_ms }` |
+| `GET /dead/<subject>` | `?from=&max=` | ARRAY of dead-letter envelopes; empty, not 404, when nothing has died |
 | `POST /requeue/<subject>` | `?index=` (into `<subject>.dead`) | `{ subject, from_dead_index, index }` |
 | `GET /queue/<subject>` | | ARRAY of group states |
 | `PUT /queue/<subject>` | `?group=&lease_ms=&max_attempts=&backoff_ms=&max_backoff_ms=` | the stored groups |
@@ -628,6 +629,13 @@ bjmsg dead jobs
 bjmsg requeue jobs --index 1     # put it back after fixing the handler
 {"subject":"jobs","from_dead_index":1,"index":4}
 ```
+
+`GET /dead/<subject>` answers for the channel rather than for the subject
+that stores it, so an empty one is an **empty array, not a 404**. The
+channel belongs to the subject — it exists whether or not anything has
+died in it — while `<subject>.dead` is a subject like any other and does
+not exist until it is published to. Reading it through `/sub` still 404s,
+correctly.
 
 The message there is an **envelope** — `{ subject, group, index, attempts,
 failed_ms, payload }` — because the payload alone does not say which group

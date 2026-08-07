@@ -344,19 +344,18 @@ export class Client extends EventEmitter {
   }
 
   /**
-   * Messages that ran out of attempts, on `<subject>.dead`. Empty when
-   * nothing has died — the channel is an ordinary subject and does not
-   * exist until it has to, which is a 404 rather than an emptiness.
+   * Messages that ran out of attempts. Empty when nothing has died: the
+   * channel belongs to the subject, so "nothing here" is an emptiness
+   * rather than an absence.
+   *
+   * They are stored as `<subject>.dead`, an ordinary subject, so `sub`,
+   * `info`, a retention policy and even a queue group of its own all
+   * work on it directly.
    */
   async dead(subject, { from = 1, max } = {}) {
-    try {
-      return (await this.#transport.request('GET', `/sub/${subject}.dead`, {
-        query: { from, max },
-      })).value;
-    } catch (err) {
-      if (err.status === 404) return [];
-      throw err;
-    }
+    return (await this.#transport.request('GET', `/dead/${subject}`, {
+      query: { from, max },
+    })).value;
   }
 
   /** Put a dead-lettered message back on the subject it came from. */

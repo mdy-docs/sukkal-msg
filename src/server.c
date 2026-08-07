@@ -842,6 +842,73 @@ static void h_fail(http11c_request *req, http11c_response *res) {
     h_job_end(req, res, 0);
 }
 
+/*
+ * A subject's dead-letter channel.
+ *
+ * It is stored as the ordinary subject "<subject>.dead" and can be read
+ * through /sub like any other — but only once something has died, because
+ * a subject does not exist until it is published to. That makes an empty
+ * channel a 404, which is the wrong answer: the channel is a property of
+ * the subject, not a resource of its own, so "nothing has died here" is
+ * an emptiness and not an absence. Both clients used to special-case the
+ * 404; this route means neither has to.
+ */
+static void h_dead(http11c_request *req, http11c_response *res) {
+    app *a = http11c_req_ctx(req);
+
+    const char *subject = subject_of(req, res, "/dead/");
+    if (!subject) return;
+
+    size_t slen = strlen(subject), dlen = sizeof BJM_DEAD_SUFFIX - 1;
+    if (slen >= dlen && strcmp(subject + slen - dlen, BJM_DEAD_SUFFIX) == 0) {
+        res_err(res, 400, "that is already a dead-letter channel; it does "
+                          "not have one of its own\n");
+        return;
+    }
+
+    char dead[BJM_SUBJECT_MAX + 1];
+    int n = snprintf(dead, sizeof dead, "%s%s", subject, BJM_DEAD_SUFFIX);
+    if (n < 0 || (size_t)n >= sizeof dead) {
+        res_err(res, 400, "subject name too long to have a dead-letter "
+                          "channel\n");
+        return;
+    }
+
+    uint64_t from = query_u64(req, "from", 1);
+    uint64_t max  = query_u64(req, "max", DEFAULT_MAX_BATCH_BYTES);
+    if (max == 0 || max > MAX_BODY_BYTES) max = DEFAULT_MAX_BATCH_BYTES;
+    if (from == 0) from = 1;
+
+    int count = 0;
+    uint64_t last = 0;
+    const uint8_t *out = NULL;
+    size_t out_len = 0;
+    int e = bjm_read(a->store, dead, from, (size_t)max,
+                     &count, &out, &out_len, &last);
+
+    if (e == BJ_ERR_STATE) {
+        /* No channel yet, so nothing has died: an empty batch, shaped
+         * exactly like a full one so a caller decodes it the same way. */
+        bj_builder *b = a->bld;
+        bj_builder_reset(b);
+        bj_begin_array(b);
+        bj_end_array(b);
+        out = bj_builder_data(b, &out_len);
+        if (!out) { res_err(res, 500, "encode failed\n"); return; }
+        http11c_res_header(res, "X-Bjmsg-Count", "0");
+        res_bj(res, 200, out, out_len);
+        return;
+    }
+    if (e) { res_err(res, status_for(e), "dead-letter read failed\n"); return; }
+
+    char buf[32];
+    snprintf(buf, sizeof buf, "%d", count);
+    http11c_res_header(res, "X-Bjmsg-Count", buf);
+    snprintf(buf, sizeof buf, "%llu", (unsigned long long)last);
+    http11c_res_header(res, "X-Bjmsg-Last-Index", buf);
+    res_bj(res, 200, out, out_len);
+}
+
 static void h_requeue(http11c_request *req, http11c_response *res) {
     app *a = http11c_req_ctx(req);
 
@@ -1112,6 +1179,7 @@ static void h_not_found(http11c_request *req, http11c_response *res) {
         "  POST   /take/<subject>?group=&max=&lease=\n"
         "  POST   /done/<subject>?group=&index=\n"
         "  POST   /fail/<subject>?group=&index=[&delay=]\n"
+        "  GET    /dead/<subject>[?from=&max=]\n"
         "  POST   /requeue/<subject>?index=   (from <subject>.dead)\n"
         "  GET    /queue/<subject>\n"
         "  PUT    /queue/<subject>?group=&lease_ms=&max_attempts=&backoff_ms=\n"
@@ -1189,6 +1257,7 @@ int bjm_serve(const char *host, int port, const char *dir,
     http11c_route(s, "POST", "/take/*", h_take);
     http11c_route(s, "POST", "/done/*", h_done);
     http11c_route(s, "POST", "/fail/*", h_fail);
+    http11c_route(s, "GET",  "/dead/*", h_dead);
     http11c_route(s, "POST", "/requeue/*", h_requeue);
     http11c_route(s, "GET",  "/queue/*", h_queues);
     http11c_route(s, "PUT",  "/queue/*", h_queue_config);

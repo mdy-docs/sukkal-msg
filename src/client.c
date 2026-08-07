@@ -2875,7 +2875,7 @@ int bjm_cmd_dead(int argc, char **argv) {
     }
 
     char url[1024];
-    snprintf(url, sizeof url, "%s/sub/%s.dead?from=%llu",
+    snprintf(url, sizeof url, "%s/dead/%s?from=%llu",
              o.url_base, o.subject,
              (unsigned long long)(o.before ? o.before : 1));
 
@@ -2891,9 +2891,10 @@ int bjm_cmd_dead(int argc, char **argv) {
         v.on_key = o_key;
         v.on_int = o_int;
         v.on_binary = d_envelope;
+        /* An empty channel is an empty array, not a 404: the broker
+         * answers for the dead-letter channel of a subject, which exists
+         * whether or not anything has died in it. */
         rc = bj_decode(c.body.p, c.body.len, &v, NULL) == BJ_OK ? 0 : 1;
-    } else if (status == 404) {
-        rc = 0;   /* nothing has ever died here */
     } else if (status > 0) {
         report_error(&c, status);
     }

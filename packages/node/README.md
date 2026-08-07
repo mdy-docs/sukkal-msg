@@ -122,8 +122,10 @@ await bjmsg.configureQueue('jobs', 'crew', {
 });
 ```
 
-After `maxAttempts` a job goes to `jobs.dead` rather than starving the
-queue. That is an ordinary subject, so everything works on it:
+After `maxAttempts` a job goes to the subject's dead-letter channel
+rather than starving the queue. An empty one is an empty list — the
+channel belongs to the subject, so "nothing has died" is not a missing
+resource:
 
 ```js
 const dead = await bjmsg.dead('jobs');
