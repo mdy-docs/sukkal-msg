@@ -1,0 +1,36 @@
+{
+  "name": "bjmsg",
+  "version": "0.2.0",
+  "description": "Node client for bjmsg — publish/subscribe over HTTP/1.1 with binjson payloads, pushed to an Express callback",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "example:sub": "node examples/subscribe.js",
+    "example:pub": "node examples/publish.js",
+    "example:work": "node examples/worker.js"
+  },
+  "keywords": [
+    "pubsub",
+    "messaging",
+    "binjson",
+    "webhook",
+    "queue",
+    "express"
+  ],
+  "license": "BSD-2-Clause",
+  "dependencies": {
+    "express": "^4.21.2",
+    "binjson": "file:../../third_party/binjson"
+  }
+}
