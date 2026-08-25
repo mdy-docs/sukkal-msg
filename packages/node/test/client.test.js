@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Client, BjmsgError } from '../src/index.js';
+import { Client, SukkalError } from '../src/index.js';
 import { startBroker, waitFor, sleep, hasBroker, BROKER } from './helpers.js';
 
 if (!hasBroker) {
@@ -216,7 +216,7 @@ test('request-reply matches on correlation', async () => {
 test('request times out when nobody answers', async () => {
   await assert.rejects(
     () => client.request('t.silent', 'anyone?', { timeoutMs: 300 }),
-    (err) => err instanceof BjmsgError && /within 300ms/.test(err.message),
+    (err) => err instanceof SukkalError && /within 300ms/.test(err.message),
   );
 });
 
@@ -270,11 +270,11 @@ test('a dropped message still acknowledges the input', async () => {
 test('errors carry the broker\'s own explanation', async () => {
   await assert.rejects(
     () => client.info('no.such.subject'),
-    (err) => err instanceof BjmsgError && err.status === 404,
+    (err) => err instanceof SukkalError && err.status === 404,
   );
   await assert.rejects(
     () => client.publish('not a valid subject', 'x'),
-    (err) => err instanceof BjmsgError && /invalid subject/.test(err.message),
+    (err) => err instanceof SukkalError && /invalid subject/.test(err.message),
   );
 });
 

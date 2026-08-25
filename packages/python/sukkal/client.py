@@ -1,4 +1,4 @@
-"""The whole of bjmsg from Python.
+"""The whole of sukkal from Python.
 
 Publishing is a request. Subscribing is the reverse: the client tells the
 broker a URL to POST to, and the reply to that POST is the
@@ -15,7 +15,7 @@ from typing import Any, Callable, List, Mapping, Optional
 from flask import Response
 
 from .binjson import decode
-from .errors import BjmsgError
+from .errors import SukkalError
 from .protocol import (
     Job, Message, encode_message, is_valid_name, is_valid_subject,
     is_valid_target, parse_delivery,
@@ -23,7 +23,7 @@ from .protocol import (
 from .receiver import Receiver
 from .transport import Transport
 
-log = logging.getLogger("bjmsg")
+log = logging.getLogger("sukkal")
 
 DEFAULT_URL = "http://127.0.0.1:8080"
 DEFAULT_REPLY_SUBJECT = "_reply"
@@ -42,7 +42,7 @@ class Subscription:
 
     A subscription holds no cursor. How far it has read is its read
     receipt in the broker, which is why it survives a broker restart, is
-    visible to `bjmsg consumers`, and counts against retention exactly
+    visible to `sukkal consumers`, and counts against retention exactly
     like any other subscription.
     """
 
@@ -170,7 +170,7 @@ class Client:
             republished output collapses onto the existing one by its id.
         """
         if not is_valid_subject(subject):
-            raise BjmsgError(f"invalid subject '{subject}'")
+            raise SukkalError(f"invalid subject '{subject}'")
         body, enveloped = encode_message(value, headers)
 
         _, _, out = self._transport.request(
@@ -213,7 +213,7 @@ class Client:
         :param tail: only messages published from now on
         """
         if not is_valid_target(target):
-            raise BjmsgError(f"invalid subject or pattern '{target}'")
+            raise SukkalError(f"invalid subject or pattern '{target}'")
 
         return self._start(
             target=target,
@@ -250,9 +250,9 @@ class Client:
             what spreads a queue evenly across workers.
         """
         if not is_valid_target(target):
-            raise BjmsgError(f"invalid subject or pattern '{target}'")
+            raise SukkalError(f"invalid subject or pattern '{target}'")
         if not is_valid_name(group):
-            raise BjmsgError("a queue group name is required")
+            raise SukkalError("a queue group name is required")
 
         return self._start(
             target=target,
@@ -322,7 +322,7 @@ class Client:
         may be waiting on it at once.
         """
         if not is_valid_subject(subject):
-            raise BjmsgError(f"invalid subject '{subject}'")
+            raise SukkalError(f"invalid subject '{subject}'")
 
         correlation = secrets.token_hex(12)
         answered = threading.Event()
@@ -339,7 +339,7 @@ class Client:
                          headers={"reply_to": reply_to, "correlation": correlation},
                          id=f"req.{correlation}")
             if not answered.wait(timeout):
-                raise BjmsgError(
+                raise SukkalError(
                     f"no reply on '{subject}' within {timeout:g}s"
                 )
             return box["value"]
@@ -375,9 +375,9 @@ class Client:
         stage keeps moving.
         """
         if not is_valid_subject(to):
-            raise BjmsgError("pipe needs a valid `to` subject")
+            raise SukkalError("pipe needs a valid `to` subject")
         if not is_valid_name(consumer):
-            raise BjmsgError("pipe needs a `consumer` name: it is where the "
+            raise SukkalError("pipe needs a `consumer` name: it is where the "
                              "stage resumes")
 
         def stage(msg: Message) -> None:
@@ -528,7 +528,7 @@ class Client:
     def _start(self, *, target, consumer, prefix, params, handle,
                group=None, always_unregister=False) -> Subscription:
         if consumer is not None and not is_valid_name(consumer):
-            raise BjmsgError(f"invalid consumer '{consumer}'")
+            raise SukkalError(f"invalid consumer '{consumer}'")
         ephemeral = consumer is None
         name = consumer or f"{prefix}-{secrets.token_hex(8)}"
 
@@ -596,7 +596,7 @@ class Client:
         time, because that is the order they were published in and the
         only thing a receipt can express.
 
-        X-Bjmsg-Ack reports how far we got: the whole batch when every
+        X-Sukkal-Ack reports how far we got: the whole batch when every
         handler succeeded, less when one raised — and 0 when none did,
         which the broker reads as "not now" and retries with a backoff
         rather than immediately.
@@ -617,12 +617,12 @@ class Client:
             took = msg.index
 
         return Response("", status=200, mimetype="text/plain",
-                        headers={"X-Bjmsg-Ack": str(took)})
+                        headers={"X-Sukkal-Ack": str(took)})
 
     def _handle_jobs(self, body, info, handler):
         """
         A job batch. Jobs finish out of order, so a high-water mark
-        cannot say which ones did: X-Bjmsg-Done names them, and the
+        cannot say which ones did: X-Sukkal-Done names them, and the
         broker returns whatever the list omits. A delivery where nothing
         succeeded is a 500, which returns all of them.
         """
@@ -645,5 +645,5 @@ class Client:
             return Response("handler failed\n", status=500, mimetype="text/plain")
         headers = {}
         if len(done) < len(jobs):
-            headers["X-Bjmsg-Done"] = ",".join(str(i) for i in done)
+            headers["X-Sukkal-Done"] = ",".join(str(i) for i in done)
         return Response("", status=200, mimetype="text/plain", headers=headers)

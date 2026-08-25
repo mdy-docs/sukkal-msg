@@ -1,5 +1,5 @@
 /*
- * client.js — the whole of bjmsg from Node.
+ * client.js — the whole of sukkal from Node.
  *
  * Publishing is a request. Subscribing is the reverse: the client tells
  * the broker a URL to POST to, and the reply to that POST is the
@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events';
 
 import { Transport } from './transport.js';
 import { Receiver } from './receiver.js';
-import { BjmsgError } from './errors.js';
+import { SukkalError } from './errors.js';
 import {
   Subscription, DEFAULT_HEARTBEAT_MS, randomToken, generatedConsumer,
 } from './subscription.js';
@@ -102,7 +102,7 @@ export class Client extends EventEmitter {
    * @returns {Promise<{subject: string, index: number, duplicate?: boolean}>}
    */
   async publish(subject, value, { id, headers, ack } = {}) {
-    if (!isValidSubject(subject)) throw new BjmsgError(`invalid subject '${subject}'`);
+    if (!isValidSubject(subject)) throw new SukkalError(`invalid subject '${subject}'`);
     const { body, enveloped } = encodeMessage(value, headers);
 
     const { value: out } = await this.#transport.request('POST', `/pub/${subject}`, {
@@ -144,7 +144,7 @@ export class Client extends EventEmitter {
   async subscribe(target, handler, {
     consumer, tail = false, from, batchBytes,
   } = {}) {
-    if (!isValidTarget(target)) throw new BjmsgError(`invalid subject or pattern '${target}'`);
+    if (!isValidTarget(target)) throw new SukkalError(`invalid subject or pattern '${target}'`);
 
     return this.#start({
       target,
@@ -174,13 +174,13 @@ export class Client extends EventEmitter {
    * @param {string} opts.group
    * @param {number} [opts.max]  jobs per delivery. One is the default,
    *        and is what spreads a queue evenly across workers.
-   * @param {string} [opts.consumer]  name it, so `bjmsg push` says which
+   * @param {string} [opts.consumer]  name it, so `sukkal push` says which
    *        worker is which
    * @returns {Promise<Subscription>}
    */
   async work(target, handler, { group, max, consumer } = {}) {
-    if (!isValidTarget(target)) throw new BjmsgError(`invalid subject or pattern '${target}'`);
-    if (!isValidName(group)) throw new BjmsgError('a queue group name is required');
+    if (!isValidTarget(target)) throw new SukkalError(`invalid subject or pattern '${target}'`);
+    if (!isValidName(group)) throw new SukkalError('a queue group name is required');
 
     return this.#start({
       target,
@@ -246,7 +246,7 @@ export class Client extends EventEmitter {
   async request(subject, value, {
     timeoutMs = 5000, replyTo = DEFAULT_REPLY_SUBJECT,
   } = {}) {
-    if (!isValidSubject(subject)) throw new BjmsgError(`invalid subject '${subject}'`);
+    if (!isValidSubject(subject)) throw new SukkalError(`invalid subject '${subject}'`);
     const correlation = randomToken(12);
 
     let settle;
@@ -264,7 +264,7 @@ export class Client extends EventEmitter {
       });
       const answer = await answered;
       if (answer === TIMED_OUT) {
-        throw new BjmsgError(`no reply on '${subject}' within ${timeoutMs}ms`);
+        throw new SukkalError(`no reply on '${subject}' within ${timeoutMs}ms`);
       }
       return answer;
     } finally {
@@ -299,8 +299,8 @@ export class Client extends EventEmitter {
    * @param {string} opts.consumer  names the stage; where it resumes
    */
   async pipe(from, handler, { to, consumer } = {}) {
-    if (!isValidSubject(to)) throw new BjmsgError('pipe needs a valid `to` subject');
-    if (!isValidName(consumer)) throw new BjmsgError('pipe needs a `consumer` name: it is where the stage resumes');
+    if (!isValidSubject(to)) throw new SukkalError('pipe needs a valid `to` subject');
+    if (!isValidName(consumer)) throw new SukkalError('pipe needs a `consumer` name: it is where the stage resumes');
 
     return this.subscribe(from, async (msg) => {
       const out = await handler(msg);
@@ -450,7 +450,7 @@ export class Client extends EventEmitter {
 
   async #start({ target, consumer, group, prefix, params, handle, alwaysUnregister }) {
     if (consumer !== undefined && !isValidName(consumer)) {
-      throw new BjmsgError(`invalid consumer '${consumer}'`);
+      throw new SukkalError(`invalid consumer '${consumer}'`);
     }
     const ephemeral = consumer === undefined;
     const name = consumer ?? generatedConsumer(prefix);
@@ -538,7 +538,7 @@ export class Client extends EventEmitter {
 
   _emitError(err, sub) {
     if (this.listenerCount('error') > 0) this.emit('error', err, sub);
-    else process.emitWarning(`bjmsg: ${err.message}`);
+    else process.emitWarning(`sukkal: ${err.message}`);
   }
 
   /**
@@ -546,7 +546,7 @@ export class Client extends EventEmitter {
    * time, because that is the order they were published in and the only
    * thing a receipt can express.
    *
-   * X-Bjmsg-Ack reports how far we got: the whole batch when every
+   * X-Sukkal-Ack reports how far we got: the whole batch when every
    * handler succeeded, less when one did not — and 0 when none did,
    * which the broker reads as "not now" and retries with a backoff
    * rather than immediately.
@@ -562,12 +562,12 @@ export class Client extends EventEmitter {
       }
       took = m.index;
     }
-    res.set('X-Bjmsg-Ack', String(took)).status(200).type('text/plain').send('');
+    res.set('X-Sukkal-Ack', String(took)).status(200).type('text/plain').send('');
   }
 
   /**
    * A job batch. Jobs finish out of order, so a high-water mark cannot
-   * say which ones did: X-Bjmsg-Done names them, and the broker returns
+   * say which ones did: X-Sukkal-Done names them, and the broker returns
    * whatever the list omits. A delivery where nothing succeeded is a 500,
    * which returns all of them.
    */
@@ -585,7 +585,7 @@ export class Client extends EventEmitter {
       res.status(500).type('text/plain').send('handler failed\n');
       return;
     }
-    if (done.length < jobs.length) res.set('X-Bjmsg-Done', done.join(','));
+    if (done.length < jobs.length) res.set('X-Sukkal-Done', done.join(','));
     res.status(200).type('text/plain').send('');
   }
 }

@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
 publish() {
     local text="$1"
     local reply
-    reply="$("$BJMSG" pub --url "$URL" "$SUBJECT" "$text")"
+    reply="$("$SUKKAL" pub --url "$URL" "$SUBJECT" "$text")"
     printf '%s %sPublished%s %d bytes to "%s"  %s%s%s\n' \
         "$(now)" "$C_BOLD" "$C_RESET" "${#text}" "$SUBJECT" \
         "$C_DIM" "$reply" "$C_RESET"
@@ -25,7 +25,7 @@ case "${1:-}" in
     --loop)
         n=1
         while true; do
-            publish "Hello bjmsg! #$n"
+            publish "Hello sukkal! #$n"
             n=$((n + 1))
             sleep 2
         done

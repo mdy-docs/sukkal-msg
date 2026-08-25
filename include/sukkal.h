@@ -1,12 +1,12 @@
 /*
- * bjmsg.h — internal interfaces of the bjmsg executable.
+ * sukkal.h — internal interfaces of the sukkal executable.
  *
- * One binary, three roles: `bjmsg serve` runs the broker on http11c,
- * `bjmsg pub` and `bjmsg sub` are libcurl clients that speak the same
+ * One binary, three roles: `sukkal serve` runs the broker on http11c,
+ * `sukkal pub` and `sukkal sub` are libcurl clients that speak the same
  * HTTP/1.1 + binjson protocol over a kept-alive connection.
  */
-#ifndef BJMSG_H
-#define BJMSG_H
+#ifndef SUKKAL_H
+#define SUKKAL_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -15,7 +15,7 @@
 #include "binjson.h"
 
 /* The media type carried by every request and success-response body. */
-#define BJMSG_MEDIA_TYPE "application/binjson"
+#define SUKKAL_MEDIA_TYPE "application/binjson"
 
 /*
  * bj_decode calls every visitor callback unconditionally — a NULL member
@@ -190,7 +190,7 @@ uint64_t bjm_last_index(bjm_store *st, const char *subject);
  *
  * The subscription holds no cursor. How far the consumer has read is its
  * ordinary receipt in the cursor tree, which is why a push subscription
- * shows up in `bjmsg consumers`, survives the broker restarting, and
+ * shows up in `sukkal consumers`, survives the broker restarting, and
  * counts against retention exactly like any other subscription.
  */
 #define BJM_CALLBACK_MAX 512
@@ -216,7 +216,7 @@ typedef struct {
  * and because handing workers one job at a time is what spreads a queue
  * evenly across them. Asking for more trades that for fewer round trips,
  * and then a worker that finished only some of them says which in
- * X-Bjmsg-Done.
+ * X-Sukkal-Done.
  */
 #define BJM_PUSH_JOBS_MAX 64
 
@@ -541,4 +541,4 @@ int bjm_cmd_reply(int argc, char **argv);
  */
 int bjm_render(FILE *f, const uint8_t *data, size_t len);
 
-#endif /* BJMSG_H */
+#endif /* SUKKAL_H */

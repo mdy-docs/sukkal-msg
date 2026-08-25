@@ -6,7 +6,7 @@
 import os
 import sys
 
-from bjmsg import Client
+from sukkal import Client
 
 messages = sys.argv[1:] or [
     "Hello NATS!",
@@ -15,7 +15,7 @@ messages = sys.argv[1:] or [
     "goodbye",
 ]
 
-with Client(os.environ.get("BJMSG_URL", "http://127.0.0.1:8080")) as client:
+with Client(os.environ.get("SUKKAL_URL", "http://127.0.0.1:8080")) as client:
     for message in messages:
         result = client.publish("greet", message)
         print(f"#{result['index']} {message!r}")

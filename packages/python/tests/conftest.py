@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-BROKER = ROOT / "bin" / "bjmsg"
+BROKER = ROOT / "bin" / "sukkal"
 
 
 def wait_for(predicate, timeout=5.0, message="timed out"):
@@ -40,7 +40,7 @@ def broker():
         pytest.skip(f"run `make` first — no {BROKER}")
 
     port = random.randint(20000, 39999)
-    directory = Path(tempfile.mkdtemp(prefix="bjmsg-py-"))
+    directory = Path(tempfile.mkdtemp(prefix="sukkal-py-"))
     proc = subprocess.Popen(
         [str(BROKER), "serve", "--port", str(port), "--dir", str(directory / "data")],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -72,7 +72,7 @@ def broker():
 
 @pytest.fixture
 def client(broker):
-    from bjmsg import Client
+    from sukkal import Client
     c = Client(broker, heartbeat_seconds=0)
     yield c
     c.close()
@@ -81,7 +81,7 @@ def client(broker):
 @pytest.fixture
 def make_client(broker):
     """A second (or third) client, closed for you at the end."""
-    from bjmsg import Client
+    from sukkal import Client
     made = []
 
     def factory(**kwargs):

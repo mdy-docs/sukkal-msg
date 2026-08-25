@@ -18,7 +18,7 @@ from typing import Any, Mapping, Optional, Tuple
 from urllib.parse import urlsplit, urlencode
 
 from .binjson import decode
-from .errors import BjmsgError, BrokerUnreachable
+from .errors import SukkalError, BrokerUnreachable
 
 MEDIA_TYPE = "application/binjson"
 
@@ -44,7 +44,7 @@ class Transport:
     ):
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https"):
-            raise BjmsgError(f"broker URL must be http:// or https://, got '{url}'")
+            raise SukkalError(f"broker URL must be http:// or https://, got '{url}'")
         self.scheme = parts.scheme
         self.host = parts.hostname or "127.0.0.1"
         self.port = parts.port or (443 if parts.scheme == "https" else 80)
@@ -97,7 +97,7 @@ class Transport:
         One request. Returns (status, headers, value) where `value` is the
         decoded binjson body, or None when there is none.
 
-        A non-2xx is raised as a BjmsgError carrying the broker's
+        A non-2xx is raised as a SukkalError carrying the broker's
         plain-text explanation.
         """
         target = self.prefix + path
@@ -161,7 +161,7 @@ class Transport:
                         raise
 
         if not (200 <= response.status < 300):
-            raise BjmsgError(
+            raise SukkalError(
                 raw.decode("utf-8", "replace").strip() or f"HTTP {response.status}",
                 status=response.status,
                 method=method,

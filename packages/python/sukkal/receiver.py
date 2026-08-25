@@ -1,6 +1,6 @@
 """The Flask side: where the broker POSTs.
 
-bjmsg pushes. A subscription names a callback URL, the broker POSTs each
+sukkal pushes. A subscription names a callback URL, the broker POSTs each
 batch to it, and the HTTP response is the acknowledgement — so a
 subscriber is a server, and this is that server.
 
@@ -70,7 +70,7 @@ class Receiver:
         *,
         port: int = 0,
         host: Optional[str] = None,
-        mount_path: str = "/bjmsg",
+        mount_path: str = "/sukkal",
         app: Optional[Flask] = None,
         body_limit: int = DEFAULT_BODY_LIMIT,
     ):
@@ -78,7 +78,7 @@ class Receiver:
         self.host = host
         self.mount_path = mount_path.rstrip("/")
         self.own = app is None
-        self.app = app or Flask("bjmsg.receiver")
+        self.app = app or Flask("sukkal.receiver")
         self.app.config.setdefault("MAX_CONTENT_LENGTH", body_limit)
 
         self._routes: Dict[str, Tuple[str, Callable]] = {}
@@ -88,7 +88,7 @@ class Receiver:
 
         self.app.add_url_rule(
             f"{self.mount_path}/<consumer>",
-            endpoint=f"bjmsg_deliver_{id(self)}",
+            endpoint=f"sukkal_deliver_{id(self)}",
             view_func=self._deliver,
             methods=["POST"],
         )
@@ -111,7 +111,7 @@ class Receiver:
         self.port = self._server.server_port
         self._thread = threading.Thread(
             target=self._server.serve_forever,
-            name="bjmsg-receiver",
+            name="sukkal-receiver",
             daemon=True,
         )
         self._thread.start()

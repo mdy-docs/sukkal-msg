@@ -129,13 +129,13 @@ def delivery_info(headers: Mapping[str, str]) -> DeliveryInfo:
             return 0
 
     return DeliveryInfo(
-        subject=lower.get("x-bjmsg-subject", ""),
-        consumer=lower.get("x-bjmsg-consumer", ""),
-        group=lower.get("x-bjmsg-group", ""),
-        count=num("x-bjmsg-count"),
-        first_index=num("x-bjmsg-first-index"),
-        last_index=num("x-bjmsg-last-index"),
-        lag=num("x-bjmsg-lag"),
+        subject=lower.get("x-sukkal-subject", ""),
+        consumer=lower.get("x-sukkal-consumer", ""),
+        group=lower.get("x-sukkal-group", ""),
+        count=num("x-sukkal-count"),
+        first_index=num("x-sukkal-first-index"),
+        last_index=num("x-sukkal-last-index"),
+        lag=num("x-sukkal-lag"),
     )
 
 

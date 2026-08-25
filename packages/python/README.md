@@ -1,7 +1,7 @@
-# bjmsg — Python client
+# sukkal — Python client
 
 Publish/subscribe over HTTP/1.1 with [binjson](https://github.com/mdy-docs/binjson)
-payloads, against a [bjmsg](../../README.md) broker.
+payloads, against a [sukkal](../../README.md) broker.
 
 Messages are **pushed, never polled**. A subscription names a callback URL
 the broker POSTs to, and the reply to that POST is the acknowledgement —
@@ -13,11 +13,11 @@ pip install -e .
 ```
 
 ```python
-from bjmsg import Client
+from sukkal import Client
 
-with Client("http://127.0.0.1:8080") as bjmsg:
-    bjmsg.subscribe("orders.>", lambda msg: print(msg.subject, msg.value))
-    bjmsg.publish("orders.new", {"id": 1, "total": 9.99})
+with Client("http://127.0.0.1:8080") as sukkal:
+    sukkal.subscribe("orders.>", lambda msg: print(msg.subject, msg.value))
+    sukkal.publish("orders.new", {"id": 1, "total": 9.99})
 ```
 
 `subscribe` starts a Flask server, works out what address this host
@@ -32,7 +32,7 @@ has no dependencies at all.
 ## Subscribing
 
 ```python
-sub = bjmsg.subscribe("greet", handle)
+sub = sukkal.subscribe("greet", handle)
 ...
 sub.close()          # or use it as a context manager
 ```
@@ -75,9 +75,9 @@ you need a total order over a set, they have to be one subject.
 ## Publishing
 
 ```python
-bjmsg.publish("orders.new", {"id": 1})
-bjmsg.publish("orders.new", "anything binjson encodes")
-bjmsg.publish("orders.new", value, headers={"trace": "abc"})
+sukkal.publish("orders.new", {"id": 1})
+sukkal.publish("orders.new", "anything binjson encodes")
+sukkal.publish("orders.new", value, headers={"trace": "abc"})
 ```
 
 `id` makes a publish **safe to retry**: a repeat inside the broker's
@@ -85,8 +85,8 @@ dedup window returns the original index instead of appending a second
 copy, and says so.
 
 ```python
-a = bjmsg.publish("orders.new", v, id="order-1")
-b = bjmsg.publish("orders.new", v, id="order-1")
+a = sukkal.publish("orders.new", v, id="order-1")
+b = sukkal.publish("orders.new", v, id="order-1")
 # b["index"] == a["index"], b["duplicate"] is True
 ```
 
@@ -101,7 +101,7 @@ def handle(job):
         log.warning("seeing #%d again", job.index)
     do_work(job.value)
 
-bjmsg.work("jobs", handle, group="crew")
+sukkal.work("jobs", handle, group="crew")
 ```
 
 Returning finishes the job. **Raising returns it to the queue**, due again
@@ -110,7 +110,7 @@ lease expires, so a handler must tolerate running twice — `job.attempts`
 above 1 is the warning that it is.
 
 ```python
-bjmsg.configure_queue("jobs", "crew", lease_ms=30_000, max_attempts=5,
+sukkal.configure_queue("jobs", "crew", lease_ms=30_000, max_attempts=5,
                       backoff_ms=1_000, max_backoff_ms=300_000)
 ```
 
@@ -120,8 +120,8 @@ channel belongs to the subject, so "nothing has died" is not a missing
 resource:
 
 ```python
-dead = bjmsg.dead("jobs")
-bjmsg.requeue("jobs", dead[0]["index"])
+dead = sukkal.dead("jobs")
+sukkal.requeue("jobs", dead[0]["index"])
 ```
 
 `max_jobs` asks for more than one job per delivery. One is the default
@@ -133,10 +133,10 @@ which.
 
 ```python
 # the service
-bjmsg.reply("echo", lambda msg: str(msg.value).upper())
+sukkal.reply("echo", lambda msg: str(msg.value).upper())
 
 # the caller
-bjmsg.request("echo", "hello")        # 'HELLO'
+sukkal.request("echo", "hello")        # 'HELLO'
 ```
 
 Repliers share a queue group, so each request is answered once however
@@ -149,7 +149,7 @@ their own answer.
 ## Pipelines
 
 ```python
-bjmsg.pipe("orders.raw", lambda msg: normalise(msg.value),
+sukkal.pipe("orders.raw", lambda msg: normalise(msg.value),
            to="orders.clean", consumer="normaliser")
 ```
 
@@ -170,13 +170,13 @@ mount into one you already have — so deliveries arrive on the port your
 service already listens on:
 
 ```python
-from bjmsg import Client, Receiver
+from sukkal import Client, Receiver
 
 app = Flask(__name__)
-receiver = Receiver(app=app, mount_path="/hooks/bjmsg")
+receiver = Receiver(app=app, mount_path="/hooks/sukkal")
 receiver.port = 3000                 # tell it where you are listening
 
-bjmsg = Client(BROKER, receiver=receiver, advertise="orders.internal")
+sukkal = Client(BROKER, receiver=receiver, advertise="orders.internal")
 ```
 
 `advertise` is what goes in the callback URL when the broker reaches this
@@ -206,7 +206,7 @@ from inside a handler is safe and reuses the same socket.
 ## What the broker needs to reach
 
 The connection runs **broker → subscriber**, which is the one thing to
-know before deploying this. bjmsg is built for server-to-server: both
+know before deploying this. sukkal is built for server-to-server: both
 ends reachable, both able to dial. A process the broker cannot dial
 cannot be pushed to, and `advertise` only helps where something in front
 forwards the connection on.
@@ -229,9 +229,9 @@ registered with is refused with a 401.
   — an HTTP status is the broker answering.
 - **A delivery the broker cannot make is retried** with a backoff, for as
   long as it takes. The receipt is durable, so an unreachable subscriber
-  is merely behind. `bjmsg.pushes()` shows the failure count and the last
+  is merely behind. `sukkal.pushes()` shows the failure count and the last
   error.
-- **Handler errors are logged, not raised**, on the `bjmsg` logger — the
+- **Handler errors are logged, not raised**, on the `sukkal` logger — the
   delivery is being retried anyway, and an exception escaping into a
   server thread would help nobody.
 
@@ -248,20 +248,20 @@ thousand messages drain as fast as they are published.
 ## Inspecting a broker
 
 ```python
-bjmsg.health()             # {"ok", "backend", "subjects", "connections", ...}
-bjmsg.subjects("eu.>")     # matching subject names
-bjmsg.info("orders")       # {"base", "first", "last", "messages", "bytes", ...}
-bjmsg.consumers("orders")  # [{"consumer", "acked", "lag"}]
-bjmsg.pushes()             # subscriptions, and how each is faring
-bjmsg.queues("jobs")       # queue-group state
+sukkal.health()             # {"ok", "backend", "subjects", "connections", ...}
+sukkal.subjects("eu.>")     # matching subject names
+sukkal.info("orders")       # {"base", "first", "last", "messages", "bytes", ...}
+sukkal.consumers("orders")  # [{"consumer", "acked", "lag"}]
+sukkal.pushes()             # subscriptions, and how each is faring
+sukkal.queues("jobs")       # queue-group state
 ```
 
 Retention, so a subject does not grow without bound. Any dimension left
 out is unlimited, and whichever limit is reached first takes effect:
 
 ```python
-bjmsg.set_policy("orders", max_age_seconds=86_400, max_messages=10_000)
-bjmsg.trim("orders", keep=1_000)
+sukkal.set_policy("orders", max_age_seconds=86_400, max_messages=10_000)
+sukkal.trim("orders", keep=1_000)
 ```
 
 By default retention will not discard a message a subscription has not
@@ -270,14 +270,14 @@ of retention being a bound that holds.
 
 ## binjson
 
-`bjmsg.encode` / `bjmsg.decode` are a complete implementation of the
+`sukkal.encode` / `sukkal.decode` are a complete implementation of the
 format, byte-for-byte compatible with the C broker and the JavaScript
 client (verified against the worked examples in
 [FORMAT.md](../../third_party/binjson/FORMAT.md) and against the
 reference encoder's output).
 
 ```python
-from bjmsg import encode, decode, ObjectId
+from sukkal import encode, decode, ObjectId
 
 decode(encode({"id": ObjectId(), "when": datetime.now(timezone.utc)}))
 ```
@@ -295,16 +295,16 @@ visible.
 
 ## Errors
 
-Everything raises `BjmsgError`, carrying the broker's own explanation
+Everything raises `SukkalError`, carrying the broker's own explanation
 (success bodies are binjson, errors are `text/plain`) and its status.
 `BrokerUnreachable` is the subclass for "nothing was sent".
 
 ```python
-from bjmsg import BjmsgError
+from sukkal import SukkalError
 
 try:
-    bjmsg.info("nope")
-except BjmsgError as err:
+    sukkal.info("nope")
+except SukkalError as err:
     if err.status == 404:
         ...
 ```
@@ -318,7 +318,7 @@ the byte sequences in FORMAT.md, which a round-trip test alone would
 happily pass on a private format.
 
 ```sh
-make -C ../..                # build bin/bjmsg first
+make -C ../..                # build bin/sukkal first
 pip install -e ".[test]"
 pytest
 ```

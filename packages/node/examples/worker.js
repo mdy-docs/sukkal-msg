@@ -12,7 +12,7 @@
  */
 import { Client } from '../src/index.js';
 
-const client = new Client({ url: process.env.BJMSG_URL ?? 'http://127.0.0.1:8080' });
+const client = new Client({ url: process.env.SUKKAL_URL ?? 'http://127.0.0.1:8080' });
 
 /*
  * A job whose worker dies is redelivered when its lease expires, so a
@@ -39,7 +39,7 @@ await client.work('jobs', async (job) => {
 }, { group: 'crew' });
 
 console.log('taking jobs from the "crew" group. Ctrl-C to stop.');
-client.on('error', (err) => console.error('bjmsg:', err.message));
+client.on('error', (err) => console.error('sukkal:', err.message));
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {

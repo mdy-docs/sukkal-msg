@@ -1,13 +1,13 @@
-# bjmsg
+# sukkal
 
 Publish/subscribe over HTTP/1.1 with [binjson](https://github.com/mdy-docs/binjson)
 payloads, as one executable that is either the broker or a client.
 
 ```sh
 make
-./bin/bjmsg serve &
-./bin/bjmsg sub orders.new &
-./bin/bjmsg pub orders.new "first message"
+./bin/sukkal serve &
+./bin/sukkal sub orders.new &
+./bin/sukkal pub orders.new "first message"
 ```
 
 Nothing polls. `sub` starts a small HTTP server of its own and tells the
@@ -23,16 +23,16 @@ deliveries on the web framework its language reaches for:
 
 ```js
 // packages/node — Express
-const bjmsg = new Client({ url: 'http://127.0.0.1:8080' });
-await bjmsg.subscribe('orders.>', (msg) => console.log(msg.subject, msg.value));
-await bjmsg.publish('orders.new', { id: 1 });
+const sukkal = new Client({ url: 'http://127.0.0.1:8080' });
+await sukkal.subscribe('orders.>', (msg) => console.log(msg.subject, msg.value));
+await sukkal.publish('orders.new', { id: 1 });
 ```
 
 ```python
 # packages/python — Flask
-with Client("http://127.0.0.1:8080") as bjmsg:
-    bjmsg.subscribe("orders.>", lambda msg: print(msg.subject, msg.value))
-    bjmsg.publish("orders.new", {"id": 1})
+with Client("http://127.0.0.1:8080") as sukkal:
+    sukkal.subscribe("orders.>", lambda msg: print(msg.subject, msg.value))
+    sukkal.publish("orders.new", {"id": 1})
 ```
 
 ## How it is built
@@ -85,7 +85,7 @@ bare `curl` against a broken request is readable.
 | `PUT /push/<subject\|pattern>` | `?consumer=&callback=[&group=&max=&token=&batch=&start=last\|&from=]` | `{ consumer, pattern, callback, group, created }` |
 | `DELETE /push` | `?consumer=[&purge=1]` | `{ consumer, deleted, purged }` |
 | `GET /push` | | ARRAY of `{ consumer, pattern, callback, delivered, inflight, failures, error }` |
-| `POST <callback>` | a batch, plus `X-Bjmsg-*` | `2xx` acks; `X-Bjmsg-Ack: N` acks part; `X-Bjmsg-Done:` for jobs |
+| `POST <callback>` | a batch, plus `X-Sukkal-*` | `2xx` acks; `X-Sukkal-Ack: N` acks part; `X-Sukkal-Done:` for jobs |
 | `GET /sub/<subject>` | `?from=&max=` | ARRAY of `{ index, term, type, payload }` |
 | `GET /sub/<subject>` | `?consumer=&ack=&start=` | same, from the consumer's receipt |
 | `POST /ack/<subject>` | `?consumer=&index=` | `{ subject, consumer, acked }` |
@@ -108,9 +108,9 @@ bare `curl` against a broken request is readable.
 | `GET /subjects` | `?pattern=` | ARRAY of subject names |
 | `GET /health` | | `{ ok, backend, subjects, connections, uptime_s }` |
 
-Subscribe also answers `X-Bjmsg-Count` and `X-Bjmsg-Last-Index`, so a
+Subscribe also answers `X-Sukkal-Count` and `X-Sukkal-Last-Index`, so a
 client can tell how far behind it is without decoding the body, plus
-`X-Bjmsg-Acked` when a consumer is named.
+`X-Sukkal-Acked` when a consumer is named.
 
 Subject names are file names: 1–128 bytes of `[A-Za-z0-9_.-]`, no leading
 or trailing dot, no `..`. A publish creates its subject; a subscribe to an
@@ -127,9 +127,9 @@ A subscription is a **callback**: a URL the broker can reach. The broker
 POSTs each batch to it, and **the HTTP response is the acknowledgement**.
 
 ```sh
-bjmsg sub orders.new                     # starts a receiver, registers it
-bjmsg sub orders.new --consumer billing  # ...durable
-bjmsg push                               # what the broker is delivering to
+sukkal sub orders.new                     # starts a receiver, registers it
+sukkal sub orders.new --consumer billing  # ...durable
+sukkal push                               # what the broker is delivering to
 ```
 
 That one decision buys three things that a streaming design would have to
@@ -142,7 +142,7 @@ work for:
   in this binary.
 - **The ack needs no channel of its own.** Delivery and acknowledgement
   are one exchange on one kept-alive connection. `2xx` accepts the batch;
-  `X-Bjmsg-Ack: N` accepts it as far as N and leaves the rest to be sent
+  `X-Sukkal-Ack: N` accepts it as far as N and leaves the rest to be sent
   again.
 - **Backpressure needs no policy.** The broker holds **at most one
   delivery in flight per subscription**, so a subscriber that is busy
@@ -154,11 +154,11 @@ Each delivery carries what a subscriber needs without decoding anything:
 
 | header | |
 | --- | --- |
-| `X-Bjmsg-Subject` | which subject this batch is from |
-| `X-Bjmsg-Consumer` | which subscription it is for |
-| `X-Bjmsg-First-Index` / `X-Bjmsg-Last-Index` | the range in the batch |
-| `X-Bjmsg-Count` | how many messages |
-| `X-Bjmsg-Lag` | how many are still waiting behind it |
+| `X-Sukkal-Subject` | which subject this batch is from |
+| `X-Sukkal-Consumer` | which subscription it is for |
+| `X-Sukkal-First-Index` / `X-Sukkal-Last-Index` | the range in the batch |
+| `X-Sukkal-Count` | how many messages |
+| `X-Sukkal-Lag` | how many are still waiting behind it |
 | `Authorization: Bearer …` | the token the subscription registered with |
 
 The body is byte-for-byte what `GET /sub` returns, so both paths decode
@@ -170,7 +170,7 @@ the same way.
 reversed: the broker dials out. That is right for a topology of instances
 — and it is what makes a broker subscribing to another broker just an
 ordinary subscription whose callback happens to be a broker — but a client
-the broker cannot reach cannot be pushed to. `bjmsg sub` works around the
+the broker cannot reach cannot be pushed to. `sukkal sub` works around the
 common case by binding to the local address it reaches the broker from
 (libcurl's `CURLINFO_LOCAL_IP`, learned from the registration it had to
 make anyway), so nothing needs configuring on one machine or one network.
@@ -187,7 +187,7 @@ Exposing that fd upstream would remove even the tick.
 ### Where a subscription starts, and where it keeps its place
 
 A push subscription **holds no cursor of its own**. How far it has read is
-its ordinary read receipt, which is why it shows in `bjmsg consumers`,
+its ordinary read receipt, which is why it shows in `sukkal consumers`,
 survives a broker restart, and counts against retention exactly like a
 pull subscription would.
 
@@ -205,17 +205,17 @@ A callback that does not answer is retried, doubling from 500 ms to a
 30 s ceiling, **forever**. Giving up would mean deciding on the
 subscriber's behalf that its messages no longer matter, and there is no
 need to decide: the receipt is durable, so an unreachable subscription is
-merely behind. `bjmsg push` shows the failure count and the last error.
+merely behind. `sukkal push` shows the failure count and the last error.
 
-A `2xx` with `X-Bjmsg-Ack: 0` is a soft refusal — "not now" — and takes
+A `2xx` with `X-Sukkal-Ack: 0` is a soft refusal — "not now" — and takes
 the same backoff, so a subscriber whose handler is failing does not spin.
-`bjmsg sub --exec CMD` uses exactly that: a non-zero exit refuses that
+`sukkal sub --exec CMD` uses exactly that: a non-zero exit refuses that
 message and everything after it in the batch, which are then redelivered
 in order.
 
 ### Registration, and the one thing that is not push
 
-`bjmsg sub` re-asserts its subscription every 30 s (`--heartbeat MS`,
+`sukkal sub` re-asserts its subscription every 30 s (`--heartbeat MS`,
 `0` to disable). This is liveness, not polling: it carries no cursor and
 asks for no messages. What it buys is self-healing — a broker whose store
 was rebuilt has no record of the subscription, and silence is
@@ -238,7 +238,7 @@ open to untrusted clients can be pointed at things on its own network**,
 and should be behind something that decides which callbacks are allowed.
 
 In the other direction, each subscription registers a bearer token that
-the broker sends on every delivery — `bjmsg sub` generates a random one
+the broker sends on every delivery — `sukkal sub` generates a random one
 unless given `--token` — so a subscriber refuses a POST that did not come
 from the broker it registered with. This is the subscriber authenticating
 the broker; consumer names are still asserted rather than authenticated,
@@ -247,7 +247,7 @@ so anything that can reach the broker can claim one.
 ### `GET /sub` is still there
 
 Pull still exists, as the way to *read* a subject rather than subscribe to
-one: browsing, one-shot tooling, `bjmsg dead`. Nothing subscribes with it.
+one: browsing, one-shot tooling, `sukkal dead`. Nothing subscribes with it.
 
 ## Reconnecting
 
@@ -256,9 +256,9 @@ Every client waits and retries when the broker cannot be reached, every
 and fails on the first refusal.
 
 ```sh
-bjmsg sub greet                          # survives the broker restarting
-bjmsg sub greet --retry 500              # ...more eagerly
-bjmsg pub greet "hi" --retry 0           # fail now rather than wait
+sukkal sub greet                          # survives the broker restarting
+sukkal sub greet --retry 500              # ...more eagerly
+sukkal pub greet "hi" --retry 0           # fail now rather than wait
 ```
 
 So a subscriber can be started before the broker exists, and keeps its
@@ -284,9 +284,9 @@ qualify depends on the request:
 A publish carrying an id is deduplicated, so repeating it is free:
 
 ```sh
-bjmsg pub orders order-42 --id order-42
+sukkal pub orders order-42 --id order-42
 {"subject":"orders","index":7,"duplicate":false}
-bjmsg pub orders order-42 --id order-42
+sukkal pub orders order-42 --id order-42
 {"subject":"orders","index":7,"duplicate":true}     # nothing appended
 ```
 
@@ -324,8 +324,8 @@ have headers carry the array. A subscriber tells them apart by the `type`
 field it already receives.
 
 ```sh
-bjmsg pub orders "an order" --header source=web --header trace=abc123
-bjmsg sub orders
+sukkal pub orders "an order" --header source=web --header trace=abc123
+sukkal sub orders
 2  [{"source":"web","trace":"abc123"},"an order"]
 ```
 
@@ -338,8 +338,8 @@ up by name.
 ## Request-reply
 
 ```sh
-bjmsg reply echo --exec 'tr a-z A-Z'      # a responder (run as many as you like)
-bjmsg request echo "hello world"          # → "HELLO WORLD"
+sukkal reply echo --exec 'tr a-z A-Z'      # a responder (run as many as you like)
+sukkal request echo "hello world"          # → "HELLO WORLD"
 ```
 
 The request carries `reply_to` and `correlation` headers. The reply goes
@@ -368,11 +368,11 @@ A request whose handler needs no answer is fine too — a message with no
 
 ## Effectively-once pipelines
 
-`bjmsg pipe` reads a subject, transforms each message, and publishes the
+`sukkal pipe` reads a subject, transforms each message, and publishes the
 result to another — with the guarantee assembled rather than assumed:
 
 ```sh
-bjmsg pipe orders --consumer enrich --to orders.enriched --exec ./enrich.sh
+sukkal pipe orders --consumer enrich --to orders.enriched --exec ./enrich.sh
 ```
 
 Two things make it hold. The output carries an **idempotency key derived
@@ -396,7 +396,7 @@ pipeline `kill -9`'d six times mid-stream produced **20 outputs, zero
 duplicates, zero missing**.
 
 The handler contract is a shell filter — payload on stdin, replacement on
-stdout, with `BJMSG_SUBJECT` / `BJMSG_CONSUMER` / `BJMSG_INDEX` in the
+stdout, with `SUKKAL_SUBJECT` / `SUKKAL_CONSUMER` / `SUKKAL_INDEX` in the
 environment. Empty stdout drops the message but still acknowledges it; a
 non-zero exit leaves it unacknowledged to be retried. `--raw` swaps the
 text rendering for encoded binjson on both sides, which is what preserves
@@ -407,7 +407,7 @@ types through a pipeline.
 The broker can only join writes that are its own. If your handler's real
 effect is somewhere else — a database row, an HTTP call — no amount of
 broker machinery makes that atomic with the cursor. What you get there is
-at-least-once plus the tools to be idempotent: `BJMSG_INDEX` is stable and
+at-least-once plus the tools to be idempotent: `SUKKAL_INDEX` is stable and
 never shifts, so the handler can record it in the same transaction as its
 own output and skip anything it has already seen. That is the same
 pattern as above, with your store playing the part the broker plays here.
@@ -446,11 +446,11 @@ name, so a pattern can never be mistaken for one — nothing has to say
 which it is.
 
 ```sh
-bjmsg sub 'orders.*' --follow
+sukkal sub 'orders.*' --follow
 orders.eu   1   "an order"
 orders.us   1   "another"
 
-bjmsg subjects 'orders.>'
+sukkal subjects 'orders.>'
 ```
 
 Output gains a subject column, because **each matched subject keeps its
@@ -459,7 +459,7 @@ index spaces, so a wildcard subscription is N ordinary subscriptions
 discovered by pattern instead of by name. Durable ones need no new
 storage at all — receipts are already keyed `<subject>/<consumer>`, so
 `sub 'orders.*' --consumer w` is simply a receipt per match, and
-`bjmsg consumers orders.us` lists it like any other.
+`sukkal consumers orders.us` lists it like any other.
 
 Matching happens **in the broker**, which is where the subjects are. A
 pushed wildcard subscription is one registration, and the broker walks its
@@ -486,8 +486,8 @@ a **read receipt** — the highest index that consumer has acknowledged —
 so rejoining delivers exactly what was missed and nothing else:
 
 ```sh
-bjmsg sub work --consumer w1             # ...run it, stop it, run it again
-bjmsg consumers work
+sukkal sub work --consumer w1             # ...run it, stop it, run it again
+sukkal consumers work
 [{"consumer":"w1","acked":8,"lag":0}]
 ```
 
@@ -500,7 +500,7 @@ forward, so a late or duplicated ack cannot rewind a consumer into replay.
 For a pushed subscription the ack costs no request at all: it **is** the
 response to the delivery, and the broker fsyncs the receipt before
 choosing the next batch. `POST /ack/<subject>?consumer=&index=` remains
-for moving a receipt by hand (`bjmsg seek`).
+for moving a receipt by hand (`sukkal seek`).
 
 Delivery is **at-least-once**. An ack commits with a CRC, so it survives
 the broker process dying, but it is not fsynced — that second fsync per
@@ -517,8 +517,8 @@ each other's messages.
 A subscription exists from its first use until it is deleted:
 
 ```sh
-bjmsg unsubscribe work --consumer w1     # forget the receipt entirely
-bjmsg seek work --consumer w1 --index 40 # or just move it forward
+sukkal unsubscribe work --consumer w1     # forget the receipt entirely
+sukkal seek work --consumer w1 --index 40 # or just move it forward
 ```
 
 `seek` only moves a receipt forward, keeping the invariant that receipts
@@ -530,13 +530,13 @@ A **queue group** turns a subject into a work queue: each message goes to
 exactly one member of the group instead of to all of them.
 
 ```sh
-bjmsg work jobs --group workers --exec ./handle-job   # run one per job
-bjmsg queue jobs                                      # what the groups are doing
-bjmsg push                                            # which workers are registered
+sukkal work jobs --group workers --exec ./handle-job   # run one per job
+sukkal queue jobs                                      # what the groups are doing
+sukkal push                                            # which workers are registered
 ```
 
 `work` writes each job's payload to the command's stdin with
-`BJMSG_SUBJECT` / `BJMSG_GROUP` / `BJMSG_INDEX` / `BJMSG_ATTEMPTS` in its
+`SUKKAL_SUBJECT` / `SUKKAL_GROUP` / `SUKKAL_INDEX` / `SUKKAL_ATTEMPTS` in its
 environment, and finishes the job if the command exits 0 or returns it to
 the queue otherwise. Run as many as you like; they compete. The primitives
 underneath are `take`, `done` and `fail` if you would rather drive it
@@ -551,7 +551,7 @@ The reply is not simply a status, because jobs finish out of order and a
 high-water mark cannot say which ones did. One job per delivery is the
 default, which makes it unambiguous — `2xx` finished it, anything else
 returned it — and is also what spreads a queue evenly across workers.
-`--max N` trades that for fewer round trips, and then `X-Bjmsg-Done`
+`--max N` trades that for fewer round trips, and then `X-Sukkal-Done`
 names the ones that succeeded; the broker fails whatever the list omits.
 
 Two things follow from the broker doing the leasing:
@@ -598,15 +598,15 @@ messages, so a retry is not starved behind the queue.
 
 That makes delivery **at-least-once**, and the reason is worth stating
 plainly: the broker cannot tell a dead worker from a slow one, so a slow
-job is run twice. Jobs must be idempotent. `BJMSG_ATTEMPTS` above 1 is a
+job is run twice. Jobs must be idempotent. `SUKKAL_ATTEMPTS` above 1 is a
 handler's warning that it is seeing a job again.
 
 A failed job does not come straight back. It waits `--backoff` (default
 1s), **doubling with each attempt** up to `--max-backoff` (default 5m):
 
 ```sh
-bjmsg queue jobs --group workers --backoff 1s --max-backoff 5m
-bjmsg fail jobs --group workers --index 42 --delay 30s   # override for one job
+sukkal queue jobs --group workers --backoff 1s --max-backoff 5m
+sukkal fail jobs --group workers --index 42 --delay 30s   # override for one job
 ```
 
 Some delay is essential, not a nicety. A job failed with no delay is due
@@ -629,10 +629,10 @@ on it. Inspect it, bound it with a retention policy, even consume it with
 its own queue group.
 
 ```sh
-bjmsg dead jobs
+sukkal dead jobs
 1  workers  orig=3  attempts=3  "poison task"
 
-bjmsg requeue jobs --index 1     # put it back after fixing the handler
+sukkal requeue jobs --index 1     # put it back after fixing the handler
 {"subject":"jobs","from_dead_index":1,"index":4}
 ```
 
@@ -645,7 +645,7 @@ correctly.
 
 The message there is an **envelope** — `{ subject, group, index, attempts,
 failed_ms, payload }` — because the payload alone does not say which group
-gave up on it or how many times it was tried. `bjmsg dead` renders it; a
+gave up on it or how many times it was tried. `sukkal dead` renders it; a
 plain `sub jobs.dead` shows the envelope with the payload as hex, since
 the payload is stored as BINARY so requeue can hand the exact original
 bytes back to the log.
@@ -681,11 +681,11 @@ These connect to a running broker, ask one question, print the answer and
 exit. They neither publish, subscribe, nor serve:
 
 ```sh
-bjmsg health              # {"ok":true,"backend":"kqueue","subjects":3,...}
-bjmsg subjects            # ["logs","orders.new"]
-bjmsg info logs           # {"subject":"logs","base":15,"first":16,"last":20,...}
-bjmsg consumers logs      # [{"consumer":"w1","acked":18,"lag":2}]
-bjmsg policy              # every retention policy
+sukkal health              # {"ok":true,"backend":"kqueue","subjects":3,...}
+sukkal subjects            # ["logs","orders.new"]
+sukkal info logs           # {"subject":"logs","base":15,"first":16,"last":20,...}
+sukkal consumers logs      # [{"consumer":"w1","acked":18,"lag":2}]
+sukkal policy              # every retention policy
 ```
 
 `info` is the one to read when reasoning about retention: `base` is where
@@ -698,10 +698,10 @@ A subject can carry a policy the broker enforces on its own, sweeping
 every 10 seconds:
 
 ```sh
-bjmsg policy logs --max-age 7d --max-messages 1000000 --max-bytes 2G
-bjmsg policy logs            # show one
-bjmsg policy                 # list every subject that has one
-bjmsg policy logs --clear
+sukkal policy logs --max-age 7d --max-messages 1000000 --max-bytes 2G
+sukkal policy logs            # show one
+sukkal policy                 # list every subject that has one
+sukkal policy logs --clear
 ```
 
 Durations take `s`/`m`/`h`/`d`/`w` and sizes take `K`/`M`/`G`/`T`; bare
@@ -719,7 +719,7 @@ also the dangerous one, because a single forgotten consumer then pins the
 log forever. `--ignore-consumers` inverts it and makes the bound real:
 
 ```sh
-bjmsg policy logs --max-messages 1000 --ignore-consumers
+sukkal policy logs --max-messages 1000 --ignore-consumers
 ```
 
 A note on each dimension:
@@ -744,8 +744,8 @@ A note on each dimension:
 `trim` does the same thing immediately, with no policy involved:
 
 ```sh
-bjmsg trim logs --keep 1000     # keep the newest 1000 messages
-bjmsg trim logs --before 5000   # drop everything below index 5000
+sukkal trim logs --keep 1000     # keep the newest 1000 messages
+sukkal trim logs --before 5000   # drop everything below index 5000
 ```
 
 This is `elog_compact`: the surviving entries are rewritten into a second
@@ -759,8 +759,8 @@ By default the boundary is **clamped to the lowest read receipt**, so
 trimming can never discard a message a subscription has not read:
 
 ```sh
-bjmsg trim logs --keep 2          # {"removed":3,...}  clamped: a consumer was behind
-bjmsg trim logs --keep 2 --force  # {"removed":5,...}  discarded its unread messages
+sukkal trim logs --keep 2          # {"removed":3,...}  clamped: a consumer was behind
+sukkal trim logs --keep 2 --force  # {"removed":5,...}  discarded its unread messages
 ```
 
 What a reader sees after a trim depends on which kind of cursor it holds:
@@ -769,7 +769,7 @@ What a reader sees after a trim depends on which kind of cursor it holds:
   surviving message, and the client prints how many it missed. "Read this
   subject from the start" should mean the start of what exists.
 - A **consumer** cursor gets a `416` instead, naming both ways out:
-  `bjmsg seek` to move it to the new base, or `bjmsg unsubscribe` to start
+  `sukkal seek` to move it to the new base, or `sukkal unsubscribe` to start
   over. A receipt is a claim about what was delivered, so skipping it
   silently would hide the loss.
 
@@ -799,7 +799,7 @@ What a reader sees after a trim depends on which kind of cursor it holds:
   running at once.
 - **Nothing bounds a dead-letter channel automatically.** It is a normal
   subject, so give it a retention policy —
-  `bjmsg policy jobs.dead --max-age 30d` — or it grows without limit.
+  `sukkal policy jobs.dead --max-age 30d` — or it grows without limit.
 - **Consumer names are asserted, not authenticated.** Any client claiming
   a name advances that subscription's receipt, and can repoint its
   callback. A broker reachable by untrusted clients also needs its
@@ -817,7 +817,7 @@ Needs a C11 compiler and libcurl (`curl-config` on `PATH`).
 
 ```sh
 git submodule update --init      # top-level submodules only
-make                             # -> bin/bjmsg
+make                             # -> bin/sukkal
 ```
 
 `-DBJIO_REQUIRE_SYNC` is on, so binjson-structures rejects at open time

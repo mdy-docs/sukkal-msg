@@ -1,7 +1,7 @@
 /*
  * receiver.js — the Express side: where the broker POSTs.
  *
- * bjmsg pushes. A subscription names a callback URL, the broker POSTs
+ * sukkal pushes. A subscription names a callback URL, the broker POSTs
  * each batch to it, and the HTTP response is the acknowledgement — so a
  * subscriber is a server, and this is that server.
  *
@@ -41,7 +41,7 @@ export class Receiver {
   constructor({
     port = 0,
     host,
-    mountPath = '/bjmsg',
+    mountPath = '/sukkal',
     app = null,
     bodyLimit = DEFAULT_BODY_LIMIT,
   } = {}) {

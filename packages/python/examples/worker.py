@@ -3,7 +3,7 @@ group, so run several of these and they compete:
 
     python examples/worker.py &
     python examples/worker.py &
-    python -c "from bjmsg import Client
+    python -c "from sukkal import Client
 with Client() as c:
     for i in range(1, 11): c.publish('jobs', i)"
 """
@@ -13,11 +13,11 @@ import signal
 import threading
 import time
 
-from bjmsg import Client
+from sukkal import Client
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-client = Client(os.environ.get("BJMSG_URL", "http://127.0.0.1:8080"))
+client = Client(os.environ.get("SUKKAL_URL", "http://127.0.0.1:8080"))
 
 # A job whose worker dies is redelivered when its lease expires, so a
 # handler must tolerate running twice — `attempts` above 1 is the warning

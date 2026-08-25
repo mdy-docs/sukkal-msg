@@ -13,7 +13,7 @@
  * appended at term 0, which is what elog's monotonicity rule (term >=
  * last_term and <= current_term, both 0) permits.
  */
-#include "bjmsg.h"
+#include "sukkal.h"
 
 #include "binjson.h"
 #include "bjio.h"
@@ -652,7 +652,7 @@ int bjm_consumers(bjm_store *st, const char *subject,
  * carries no cursor of its own: how far the consumer has read is the
  * receipt in _cursors.bpt, exactly as for a pull subscriber. So the same
  * subscription can be pushed today and pulled tomorrow without losing its
- * place, `bjmsg consumers` reports both, and retention's trim boundary
+ * place, `sukkal consumers` reports both, and retention's trim boundary
  * already accounts for it.
  */
 static int push_open(bjm_store *st) {

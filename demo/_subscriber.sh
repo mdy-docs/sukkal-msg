@@ -5,7 +5,7 @@
 # only messages published while this subscriber is running are delivered,
 # so the log's backlog is skipped.
 #
-# Nothing here polls. `bjmsg sub` starts a small HTTP server of its own,
+# Nothing here polls. `sukkal sub` starts a small HTTP server of its own,
 # tells the broker to POST matching messages to it, and prints them as
 # they land — so a message shows up in well under a millisecond rather
 # than on the next tick of a poll.
@@ -40,7 +40,7 @@ echo "${C_DIM}Ctrl-C to stop.${C_RESET}"
 # acknowledged. The difference is what happens on exit: an ephemeral
 # subscription takes its position with it, a durable one leaves it behind
 # to resume from.
-"$BJMSG" sub --url "$URL" "$SUBJECT" "${SUB_ARGS[@]}" |
+"$SUKKAL" sub --url "$URL" "$SUBJECT" "${SUB_ARGS[@]}" |
 while IFS=$'\t' read -r index payload; do
     printf '%s%s[%s]%s %s [#%s] Received on "%s"\n  %s\n' \
         "$COLOUR" "$C_BOLD" "$NAME" "$C_RESET" "$(now)" \

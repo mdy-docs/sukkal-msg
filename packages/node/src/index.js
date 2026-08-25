@@ -1,5 +1,5 @@
 /*
- * bjmsg — publish/subscribe over HTTP/1.1 with binjson payloads.
+ * sukkal — publish/subscribe over HTTP/1.1 with binjson payloads.
  *
  * Messages are pushed, never polled: a subscription names a callback URL
  * the broker POSTs to, and the reply to that POST is the
@@ -9,7 +9,7 @@
 export { Client } from './client.js';
 export { Receiver } from './receiver.js';
 export { Subscription, DEFAULT_HEARTBEAT_MS } from './subscription.js';
-export { BjmsgError, BrokerUnreachable } from './errors.js';
+export { SukkalError, BrokerUnreachable } from './errors.js';
 export {
   ENTRY, unwrap, encodeMessage, parseDelivery,
   isValidSubject, isValidPattern, isValidTarget, isPattern,

@@ -6,10 +6,10 @@
  * about what was wrong rather than a status code alone.
  */
 
-export class BjmsgError extends Error {
+export class SukkalError extends Error {
   constructor(message, { status, method, url, cause } = {}) {
     super(message, { cause });
-    this.name = 'BjmsgError';
+    this.name = 'SukkalError';
     this.status = status;
     this.method = method;
     this.url = url;
@@ -17,7 +17,7 @@ export class BjmsgError extends Error {
 }
 
 /** The broker could not be reached at all — nothing was sent. */
-export class BrokerUnreachable extends BjmsgError {
+export class BrokerUnreachable extends SukkalError {
   constructor(origin, cause) {
     super(`cannot reach the broker at ${origin}: ${cause.message}`, { cause });
     this.name = 'BrokerUnreachable';

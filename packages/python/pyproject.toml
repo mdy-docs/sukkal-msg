@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bjmsg"
+name = "sukkal"
 version = "0.2.0"
-description = "Python client for bjmsg — publish/subscribe over HTTP/1.1 with binjson payloads, pushed to a Flask callback"
+description = "Python client for sukkal — publish/subscribe over HTTP/1.1 with binjson payloads, pushed to a Flask callback"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "BSD-2-Clause" }
@@ -24,7 +24,7 @@ dependencies = ["flask>=2.0"]
 test = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
-include = ["bjmsg*"]
+include = ["sukkal*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

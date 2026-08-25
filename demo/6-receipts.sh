@@ -12,6 +12,6 @@ echo "${C_DIM}refreshing every second; Ctrl-C to stop.${C_RESET}"
 echo
 
 while true; do
-    printf '%s  %s\n' "$(now)" "$("$BJMSG" consumers --url "$URL" "$SUBJECT" 2>&1)"
+    printf '%s  %s\n' "$(now)" "$("$SUKKAL" consumers --url "$URL" "$SUBJECT" 2>&1)"
     sleep 1
 done

@@ -79,7 +79,7 @@ restarting.
 
 ## Where this differs from NATS
 
-- **Subscribers are HTTP servers.** `bjmsg sub` starts one, registers it
+- **Subscribers are HTTP servers.** `sukkal sub` starts one, registers it
   as a callback, and the broker POSTs to it — so the connection runs from
   broker to subscriber, and delivery takes well under a millisecond. The
   reply to that POST is the acknowledgement; there is no second request.
@@ -94,7 +94,7 @@ restarting.
   it.** An unnamed subscription takes its position with it when it stops;
   `DURABLE=1` gives it a name, and the receipt stays behind to resume
   from — closer to a JetStream durable consumer than to NATS core.
-- **Wildcards are matched in the broker.** `bjmsg sub 'greet.>'` is one
+- **Wildcards are matched in the broker.** `sukkal sub 'greet.>'` is one
   registration, and a subject created later is delivered from its first
   message.
 
@@ -107,4 +107,4 @@ overridden across all five terminals:
 export PORT=9090 SUBJECT=orders.new
 ```
 
-`BJMSG`, `HOST`, `PORT`, `URL`, `SUBJECT`, `DATA_DIR`.
+`SUKKAL`, `HOST`, `PORT`, `URL`, `SUBJECT`, `DATA_DIR`.

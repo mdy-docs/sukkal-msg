@@ -3,7 +3,7 @@ build/
 bin/
 
 # Default store directory
-bjmsg-data/
+sukkal-data/
 demo/data/
 
 # Prerequisites

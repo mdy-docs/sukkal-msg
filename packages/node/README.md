@@ -1,7 +1,7 @@
-# bjmsg — Node client
+# sukkal — Node client
 
 Publish/subscribe over HTTP/1.1 with [binjson](https://github.com/mdy-docs/binjson)
-payloads, against a [bjmsg](../../README.md) broker.
+payloads, against a [sukkal](../../README.md) broker.
 
 Messages are **pushed, never polled**. A subscription names a callback URL
 the broker POSTs to, and the reply to that POST is the acknowledgement —
@@ -14,17 +14,17 @@ npm install
 ```
 
 ```js
-import { Client } from 'bjmsg';
+import { Client } from 'sukkal';
 
-const bjmsg = new Client({ url: 'http://127.0.0.1:8080' });
+const sukkal = new Client({ url: 'http://127.0.0.1:8080' });
 
-await bjmsg.subscribe('orders.>', (msg) => {
+await sukkal.subscribe('orders.>', (msg) => {
   console.log(msg.subject, msg.index, msg.value);
 });
 
-await bjmsg.publish('orders.new', { id: 1, total: 9.99 });
+await sukkal.publish('orders.new', { id: 1, total: 9.99 });
 
-await bjmsg.close();
+await sukkal.close();
 ```
 
 `subscribe` starts an Express server, works out what address this host
@@ -35,7 +35,7 @@ or one network.
 ## Subscribing
 
 ```js
-const sub = await bjmsg.subscribe('greet', async (msg) => {
+const sub = await sukkal.subscribe('greet', async (msg) => {
   await handle(msg.value);
 });
 
@@ -74,7 +74,7 @@ Matching happens in the broker, so a subject created later is picked up
 with nothing re-resolving — and `msg.subject` says which one it was.
 
 ```js
-await bjmsg.subscribe('orders.*.created', (msg) => …);
+await sukkal.subscribe('orders.*.created', (msg) => …);
 ```
 
 There is **no order across subjects**: each is delivered in its own
@@ -84,9 +84,9 @@ you need a total order over a set, they have to be one subject.
 ## Publishing
 
 ```js
-await bjmsg.publish('orders.new', { id: 1 });
-await bjmsg.publish('orders.new', 'anything binjson encodes');
-await bjmsg.publish('orders.new', value, { headers: { trace: 'abc' } });
+await sukkal.publish('orders.new', { id: 1 });
+await sukkal.publish('orders.new', 'anything binjson encodes');
+await sukkal.publish('orders.new', value, { headers: { trace: 'abc' } });
 ```
 
 `id` makes a publish **safe to retry**: a repeat inside the broker's
@@ -94,8 +94,8 @@ dedup window returns the original index instead of appending a second
 copy, and says so.
 
 ```js
-const a = await bjmsg.publish('orders.new', v, { id: 'order-1' });
-const b = await bjmsg.publish('orders.new', v, { id: 'order-1' });
+const a = await sukkal.publish('orders.new', v, { id: 'order-1' });
+const b = await sukkal.publish('orders.new', v, { id: 'order-1' });
 // b.index === a.index, b.duplicate === true
 ```
 
@@ -105,7 +105,7 @@ A queue group turns a subject into a work queue: each job goes to exactly
 one member, however many are running.
 
 ```js
-await bjmsg.work('jobs', async (job) => {
+await sukkal.work('jobs', async (job) => {
   if (job.attempts > 1) console.warn('seeing this one again');
   await process(job.value);
 }, { group: 'crew' });
@@ -117,7 +117,7 @@ when its lease expires, so a handler must tolerate running twice —
 `job.attempts` above 1 is the warning that it is.
 
 ```js
-await bjmsg.configureQueue('jobs', 'crew', {
+await sukkal.configureQueue('jobs', 'crew', {
   leaseMs: 30000, maxAttempts: 5, backoffMs: 1000, maxBackoffMs: 300000,
 });
 ```
@@ -128,8 +128,8 @@ channel belongs to the subject, so "nothing has died" is not a missing
 resource:
 
 ```js
-const dead = await bjmsg.dead('jobs');
-await bjmsg.requeue('jobs', dead[0].index);
+const dead = await sukkal.dead('jobs');
+await sukkal.requeue('jobs', dead[0].index);
 ```
 
 `max` asks for more than one job per delivery. One is the default and is
@@ -140,10 +140,10 @@ round trips, and a worker that finishes only some of them says which.
 
 ```js
 // the service
-await bjmsg.reply('echo', (msg) => String(msg.value).toUpperCase());
+await sukkal.reply('echo', (msg) => String(msg.value).toUpperCase());
 
 // the caller
-const answer = await bjmsg.request('echo', 'hello');   // 'HELLO'
+const answer = await sukkal.request('echo', 'hello');   // 'HELLO'
 ```
 
 Repliers share a queue group, so each request is answered once however
@@ -155,7 +155,7 @@ needing one each.
 ## Pipelines
 
 ```js
-await bjmsg.pipe('orders.raw', (msg) => normalise(msg.value), {
+await sukkal.pipe('orders.raw', (msg) => normalise(msg.value), {
   to: 'orders.clean',
   consumer: 'normaliser',
 });
@@ -179,17 +179,17 @@ listens on:
 
 ```js
 import express from 'express';
-import { Client, Receiver } from 'bjmsg';
+import { Client, Receiver } from 'sukkal';
 
 const app = express();
-const receiver = new Receiver({ app, mountPath: '/hooks/bjmsg' });
+const receiver = new Receiver({ app, mountPath: '/hooks/sukkal' });
 
 const server = app.listen(3000);
 server.keepAliveTimeout = 5 * 60 * 1000;      // the broker parks here
 server.headersTimeout = server.keepAliveTimeout + 1000;
 receiver.port = 3000;
 
-const bjmsg = new Client({ url: BROKER, receiver, advertise: 'orders.internal' });
+const sukkal = new Client({ url: BROKER, receiver, advertise: 'orders.internal' });
 ```
 
 `advertise` is what goes in the callback URL when the broker reaches this
@@ -203,7 +203,7 @@ to.
 ## What the broker needs to reach
 
 The connection runs **broker → subscriber**, which is the one thing to
-know before deploying this. bjmsg is built for server-to-server: both
+know before deploying this. sukkal is built for server-to-server: both
 ends reachable, both able to dial. A process the broker cannot dial
 cannot be pushed to, and `advertise` only helps where something in front
 forwards the connection on.
@@ -226,7 +226,7 @@ registered with is refused with a 401.
   is the broker answering.
 - **A delivery the broker cannot make is retried** with a backoff, for as
   long as it takes. The receipt is durable, so an unreachable subscriber
-  is merely behind. `await bjmsg.pushes()` shows the failure count and the
+  is merely behind. `await sukkal.pushes()` shows the failure count and the
   last error.
 - **Handler errors are emitted, not thrown.** `client.on('error', …)`, or
   they surface as process warnings.
@@ -234,20 +234,20 @@ registered with is refused with a 401.
 ## Inspecting a broker
 
 ```js
-await bjmsg.health();          // { ok, backend, subjects, connections, … }
-await bjmsg.subjects('eu.>');  // matching subject names
-await bjmsg.info('orders');    // { base, first, last, messages, bytes, … }
-await bjmsg.consumers('orders');  // [{ consumer, acked, lag }]
-await bjmsg.pushes();          // subscriptions, and how each is faring
-await bjmsg.queues('jobs');    // queue-group state
+await sukkal.health();          // { ok, backend, subjects, connections, … }
+await sukkal.subjects('eu.>');  // matching subject names
+await sukkal.info('orders');    // { base, first, last, messages, bytes, … }
+await sukkal.consumers('orders');  // [{ consumer, acked, lag }]
+await sukkal.pushes();          // subscriptions, and how each is faring
+await sukkal.queues('jobs');    // queue-group state
 ```
 
 Retention, so a subject does not grow without bound. Any dimension left
 out is unlimited, and whichever limit is reached first takes effect:
 
 ```js
-await bjmsg.setPolicy('orders', { maxAgeSeconds: 86400, maxMessages: 10000 });
-await bjmsg.trim('orders', { keep: 1000 });
+await sukkal.setPolicy('orders', { maxAgeSeconds: 86400, maxMessages: 10000 });
+await sukkal.trim('orders', { keep: 1000 });
 ```
 
 By default retention will not discard a message a subscription has not
@@ -256,17 +256,17 @@ of retention being a bound that holds.
 
 ## Errors
 
-Everything throws `BjmsgError`, carrying the broker's own explanation
+Everything throws `SukkalError`, carrying the broker's own explanation
 (success bodies are binjson, errors are `text/plain`) and its status.
 `BrokerUnreachable` is the subclass for "nothing was sent".
 
 ```js
-import { BjmsgError } from 'bjmsg';
+import { SukkalError } from 'sukkal';
 
 try {
-  await bjmsg.info('nope');
+  await sukkal.info('nope');
 } catch (err) {
-  if (err instanceof BjmsgError && err.status === 404) …
+  if (err instanceof SukkalError && err.status === 404) …
 }
 ```
 
@@ -277,6 +277,6 @@ this library is interoperating with the C broker's wire format, and a
 mock would only assert that it agrees with itself.
 
 ```sh
-make -C ../..      # build bin/bjmsg first
+make -C ../..      # build bin/sukkal first
 npm test
 ```

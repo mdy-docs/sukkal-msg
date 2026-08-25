@@ -3,7 +3,7 @@
  *
  * A subscription holds no cursor. How far it has read is its read
  * receipt in the broker, which is why it survives a broker restart, is
- * visible to `bjmsg consumers`, and counts against retention exactly
+ * visible to `sukkal consumers`, and counts against retention exactly
  * like any other subscription.
  */
 import { randomBytes } from 'node:crypto';

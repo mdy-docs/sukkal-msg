@@ -27,14 +27,14 @@ THIRD_PARTY := third_party/binjson/src/binjson.c \
 
 OBJ := $(patsubst %.c,build/%.o,$(SRC) $(THIRD_PARTY))
 
-all: bin/bjmsg
+all: bin/sukkal
 
-bin/bjmsg: $(OBJ)
+bin/sukkal: $(OBJ)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $^ $(CURL_LIBS) -o $@
 
 # Our own sources are warning-free and stay that way.
-build/src/%.o: src/%.c include/bjmsg.h
+build/src/%.o: src/%.c include/sukkal.h
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -Werror $(CPPFLAGS) $(CURL_CFLAGS) -c $< -o $@
 

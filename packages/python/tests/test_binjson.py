@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from bjmsg.binjson import (
+from sukkal.binjson import (
     BinjsonError, ObjectId, Pointer, decode, decode_stream, encode, value_size,
 )
 

@@ -10,7 +10,7 @@ import threading
 from flask import Flask
 from werkzeug.serving import make_server
 
-from bjmsg import Client, Receiver
+from sukkal import Client, Receiver
 
 app = Flask(__name__)
 
@@ -22,7 +22,7 @@ def index():
 
 # Passing `app` means the Receiver mounts its delivery route and leaves
 # listening to you.
-receiver = Receiver(app=app, mount_path="/hooks/bjmsg")
+receiver = Receiver(app=app, mount_path="/hooks/sukkal")
 
 PORT = int(os.environ.get("PORT", 3000))
 server = make_server("0.0.0.0", PORT, app, threaded=True)
@@ -32,7 +32,7 @@ print(f"app on :{PORT}", flush=True)
 receiver.port = PORT
 
 client = Client(
-    os.environ.get("BJMSG_URL", "http://127.0.0.1:8080"),
+    os.environ.get("SUKKAL_URL", "http://127.0.0.1:8080"),
     receiver=receiver,
     # What to put in the callback URL, when the broker reaches this
     # service by a name rather than by the address we happen to bind.
@@ -44,6 +44,6 @@ def show(msg):
 
 
 client.subscribe("orders.>", show, consumer="orders-service")
-print("subscribed; deliveries arrive on /hooks/bjmsg/orders-service", flush=True)
+print("subscribed; deliveries arrive on /hooks/sukkal/orders-service", flush=True)
 
 threading.Event().wait()

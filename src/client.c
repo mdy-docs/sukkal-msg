@@ -1,5 +1,5 @@
 /*
- * client.c — `bjmsg pub` and `bjmsg sub`, over libcurl.
+ * client.c — `sukkal pub` and `sukkal sub`, over libcurl.
  *
  * Both reuse a single CURL easy handle for every request, which is what
  * makes the connection persistent: libcurl keeps the socket in the
@@ -7,7 +7,7 @@
  * handshake entirely. That matters most for `sub`, which is a polling
  * loop — the poll costs one small request on an already-open socket.
  */
-#include "bjmsg.h"
+#include "sukkal.h"
 
 #include "binjson.h"
 #include "http11c.h"
@@ -68,9 +68,9 @@ typedef struct {
     CURL *curl;
     struct curl_slist *headers;
     buf body;                 /* response body of the last request */
-    uint64_t last_index;      /* X-Bjmsg-Last-Index of the last response */
-    uint64_t acked;           /* X-Bjmsg-Acked: the broker's stored receipt */
-    uint64_t skipped;         /* X-Bjmsg-Skipped: messages trimmed away    */
+    uint64_t last_index;      /* X-Sukkal-Last-Index of the last response */
+    uint64_t acked;           /* X-Sukkal-Acked: the broker's stored receipt */
+    uint64_t skipped;         /* X-Sukkal-Skipped: messages trimmed away    */
     long retry_ms;            /* 0 = give up on the first failure */
     int  waiting;             /* already reported that we are retrying */
 } client;
@@ -90,11 +90,11 @@ static size_t header_is(const char *data, size_t len, const char *name) {
 static size_t on_header(char *data, size_t size, size_t nmemb, void *user) {
     client *c = user;
     size_t n = size * nmemb, at;
-    if ((at = header_is(data, n, "x-bjmsg-last-index:")))
+    if ((at = header_is(data, n, "x-sukkal-last-index:")))
         c->last_index = strtoull(data + at, NULL, 10);
-    else if ((at = header_is(data, n, "x-bjmsg-acked:")))
+    else if ((at = header_is(data, n, "x-sukkal-acked:")))
         c->acked = strtoull(data + at, NULL, 10);
-    else if ((at = header_is(data, n, "x-bjmsg-skipped:")))
+    else if ((at = header_is(data, n, "x-sukkal-skipped:")))
         c->skipped = strtoull(data + at, NULL, 10);
     return n;
 }
@@ -175,7 +175,7 @@ static long client_perform_ex(client *c, const char *url, int idempotent) {
 
         if (rc == CURLE_OK) {
             if (c->waiting) {
-                fprintf(stderr, "bjmsg: reconnected.\n");
+                fprintf(stderr, "sukkal: reconnected.\n");
                 c->waiting = 0;
             }
             long status = 0;
@@ -185,15 +185,15 @@ static long client_perform_ex(client *c, const char *url, int idempotent) {
 
         int retryable = never_arrived(rc) || (idempotent && broke_midway(rc));
         if (!retryable || c->retry_ms <= 0) {
-            fprintf(stderr, "bjmsg: %s: %s\n", url, curl_easy_strerror(rc));
+            fprintf(stderr, "sukkal: %s: %s\n", url, curl_easy_strerror(rc));
             if (retryable && c->retry_ms <= 0)
-                fprintf(stderr, "bjmsg: (retries are off; --retry MS waits "
+                fprintf(stderr, "sukkal: (retries are off; --retry MS waits "
                                 "and tries again)\n");
             return -1;
         }
 
         if (!c->waiting) {
-            fprintf(stderr, "bjmsg: %s: %s — retrying every %ldms, "
+            fprintf(stderr, "sukkal: %s: %s — retrying every %ldms, "
                             "Ctrl-C to give up\n",
                     url, curl_easy_strerror(rc), c->retry_ms);
             c->waiting = 1;
@@ -221,7 +221,7 @@ static int parse_ms(const char *v, long *out) {
 
 /* Print a non-200 response, which the server sends as plain text. */
 static void report_error(client *c, long status) {
-    fprintf(stderr, "bjmsg: HTTP %ld: %.*s", status,
+    fprintf(stderr, "sukkal: HTTP %ld: %.*s", status,
             (int)c->body.len, c->body.p ? (const char *)c->body.p : "");
     if (c->body.len == 0 || c->body.p[c->body.len - 1] != '\n')
         fputc('\n', stderr);
@@ -229,7 +229,7 @@ static void report_error(client *c, long status) {
 
 static const char *arg_value(int argc, char **argv, int *i, const char *name) {
     if (*i + 1 >= argc) {
-        fprintf(stderr, "bjmsg: %s needs a value\n", name);
+        fprintf(stderr, "sukkal: %s needs a value\n", name);
         return NULL;
     }
     return argv[++(*i)];
@@ -237,7 +237,7 @@ static const char *arg_value(int argc, char **argv, int *i, const char *name) {
 
 static int read_all(const char *path, buf *out) {
     FILE *f = (strcmp(path, "-") == 0) ? stdin : fopen(path, "rb");
-    if (!f) { fprintf(stderr, "bjmsg: cannot open %s\n", path); return -1; }
+    if (!f) { fprintf(stderr, "sukkal: cannot open %s\n", path); return -1; }
     char chunk[8192];
     size_t n;
     int rc = 0;
@@ -251,7 +251,7 @@ static int read_all(const char *path, buf *out) {
 
 static void pub_usage(void) {
     fprintf(stderr,
-        "usage: bjmsg pub [--url URL] [--retry MS] [--id KEY | --auto-id]\n"
+        "usage: sukkal pub [--url URL] [--retry MS] [--id KEY | --auto-id]\n"
         "                 <subject> (<text> | --int N | --file PATH)\n"
         "\n"
         "  <text>       publish a binjson STRING\n"
@@ -303,7 +303,7 @@ int bjm_cmd_pub(int argc, char **argv) {
         } else if (strcmp(a, "--retry") == 0) {
             const char *v = arg_value(argc, argv, &i, "--retry");
             if (!v || parse_ms(v, &retry_ms) != 0) {
-                fprintf(stderr, "bjmsg: --retry needs a millisecond count "
+                fprintf(stderr, "sukkal: --retry needs a millisecond count "
                                 "(0 to disable)\n");
                 return 2;
             }
@@ -311,11 +311,11 @@ int bjm_cmd_pub(int argc, char **argv) {
             const char *v = arg_value(argc, argv, &i, "--header");
             if (!v) return 2;
             if (!strchr(v, '=')) {
-                fprintf(stderr, "bjmsg: --header wants name=value\n");
+                fprintf(stderr, "sukkal: --header wants name=value\n");
                 return 2;
             }
             if (nhdr == (int)(sizeof hdr / sizeof hdr[0])) {
-                fprintf(stderr, "bjmsg: too many headers\n");
+                fprintf(stderr, "sukkal: too many headers\n");
                 return 2;
             }
             hdr[nhdr++] = v;
@@ -334,21 +334,21 @@ int bjm_cmd_pub(int argc, char **argv) {
             pub_usage();
             return 0;
         } else if (a[0] == '-' && a[1] != '\0') {
-            fprintf(stderr, "bjmsg: unknown option %s\n", a);
+            fprintf(stderr, "sukkal: unknown option %s\n", a);
             return 2;
         } else if (!subject) {
             subject = a;
         } else if (!text) {
             text = a;
         } else {
-            fprintf(stderr, "bjmsg: unexpected argument %s\n", a);
+            fprintf(stderr, "sukkal: unexpected argument %s\n", a);
             return 2;
         }
     }
 
     if (!subject || (!text && !file && !have_int)) { pub_usage(); return 2; }
     if (!bjm_subject_valid(subject)) {
-        fprintf(stderr, "bjmsg: invalid subject '%s'\n", subject);
+        fprintf(stderr, "sukkal: invalid subject '%s'\n", subject);
         return 2;
     }
 
@@ -361,7 +361,7 @@ int bjm_cmd_pub(int argc, char **argv) {
         size_t size = 0;
         if (bj_value_size(payload.p, payload.len, 0, &size) != BJ_OK ||
             size != payload.len) {
-            fprintf(stderr, "bjmsg: %s is not exactly one binjson value\n", file);
+            fprintf(stderr, "sukkal: %s is not exactly one binjson value\n", file);
             buf_free(&payload);
             return 1;
         }
@@ -389,7 +389,7 @@ int bjm_cmd_pub(int argc, char **argv) {
         if (!d || buf_append(&payload, d, len) != 0) {
             bj_builder_free(b);
             buf_free(&payload);
-            fprintf(stderr, "bjmsg: encode failed\n");
+            fprintf(stderr, "sukkal: encode failed\n");
             return 1;
         }
         bj_builder_free(b);
@@ -397,7 +397,7 @@ int bjm_cmd_pub(int argc, char **argv) {
 
     client c;
     if (client_init(&c, retry_ms) != 0) { buf_free(&payload); return 1; }
-    c.headers = curl_slist_append(NULL, "Content-Type: " BJMSG_MEDIA_TYPE);
+    c.headers = curl_slist_append(NULL, "Content-Type: " SUKKAL_MEDIA_TYPE);
     curl_easy_setopt(c.curl, CURLOPT_HTTPHEADER, c.headers);
     curl_easy_setopt(c.curl, CURLOPT_POST, 1L);
     curl_easy_setopt(c.curl, CURLOPT_POSTFIELDS, payload.p);
@@ -479,7 +479,7 @@ static void s_binary(void *ctx, const uint8_t *bytes, uint32_t len) {
 
 static void sub_usage(void) {
     fprintf(stderr,
-        "usage: bjmsg sub [--url URL] <subject|pattern> [--consumer NAME]\n"
+        "usage: sukkal sub [--url URL] <subject|pattern> [--consumer NAME]\n"
         "                 [--port N] [--bind ADDR] [--callback URL] [--token T]\n"
         "                 [--tail | --from N] [--exec CMD] [--keep]\n"
         "                 [--retry MS] [--batch BYTES] [--heartbeat MS]\n"
@@ -581,7 +581,7 @@ static void dv_binary(void *ctx, const uint8_t *bytes, uint32_t len) {
     if (d->exec) {
         feed_for(bytes, len, 0, &d->feed);
         if (run_handler(d->exec, d->feed.p, d->feed.len) != 0) {
-            fprintf(stderr, "bjmsg: handler failed on %s%s#%lld — "
+            fprintf(stderr, "sukkal: handler failed on %s%s#%lld — "
                             "refusing it and everything after\n",
                     d->subject ? d->subject : "", d->subject ? " " : "",
                     d->index);
@@ -630,7 +630,7 @@ static void h_deliver(http11c_request *req, http11c_response *res) {
         }
     }
 
-    const char *subject = http11c_req_header(req, "X-Bjmsg-Subject");
+    const char *subject = http11c_req_header(req, "X-Sukkal-Subject");
     size_t len = 0;
     const uint8_t *body = (const uint8_t *)http11c_req_body(req, &len);
     if (!body || len == 0) {
@@ -661,14 +661,14 @@ static void h_deliver(http11c_request *req, http11c_response *res) {
     r->deliveries++;
 
     /*
-     * The reply is the acknowledgement. X-Bjmsg-Ack says how far we got,
+     * The reply is the acknowledgement. X-Sukkal-Ack says how far we got,
      * which is the whole batch when every handler succeeded and less when
      * one did not — 0 meaning we took none of it, which the broker reads
      * as "not now" and retries with a backoff rather than immediately.
      */
     char ack[32];
     snprintf(ack, sizeof ack, "%llu", (unsigned long long)d.took);
-    http11c_res_header(res, "X-Bjmsg-Ack", ack);
+    http11c_res_header(res, "X-Sukkal-Ack", ack);
     http11c_res_header(res, "Content-Type", "text/plain");
     http11c_res_text(res, 200, "");
 }
@@ -831,7 +831,7 @@ static int receiver_run(receiver_spec *sp) {
     if (!sp->bind_addr || !sp->callback) {
         if (probe_local_ip(&c, sp->url_base, local_ip, sizeof local_ip) != 0) {
             if (g_stop) { client_free(&c); return 0; }
-            fprintf(stderr, "bjmsg: cannot reach the broker at %s\n",
+            fprintf(stderr, "sukkal: cannot reach the broker at %s\n",
                     sp->url_base);
             client_free(&c);
             return 1;
@@ -853,7 +853,7 @@ static int receiver_run(receiver_spec *sp) {
     http11c_route(srv, "POST", sp->path, sp->handler);
 
     if (http11c_listen(srv, bind_addr, sp->port) != 0) {
-        fprintf(stderr, "bjmsg: cannot listen on %s:%d\n",
+        fprintf(stderr, "sukkal: cannot listen on %s:%d\n",
                 bind_addr, sp->port);
         http11c_server_free(srv);
         client_free(&c);
@@ -879,10 +879,10 @@ static int receiver_run(receiver_spec *sp) {
     }
 
     if (sp->group)
-        fprintf(stderr, "bjmsg: working %s group '%s' as '%s' on %s\n",
+        fprintf(stderr, "sukkal: working %s group '%s' as '%s' on %s\n",
                 sp->pattern, sp->group, sp->consumer, self);
     else
-        fprintf(stderr, "bjmsg: receiving %s as '%s' on %s\n",
+        fprintf(stderr, "sukkal: receiving %s as '%s' on %s\n",
                 sp->pattern, sp->consumer, self);
 
     int rc = 0;
@@ -902,7 +902,7 @@ static int receiver_run(receiver_spec *sp) {
          */
         c.waiting = 0;
         if (push_register(&c, sp, self) != 200 && !g_stop)
-            fprintf(stderr, "bjmsg: could not re-register the subscription\n");
+            fprintf(stderr, "sukkal: could not re-register the subscription\n");
     }
 
     /*
@@ -918,9 +918,9 @@ static int receiver_run(receiver_spec *sp) {
         c.waiting = 0;
         if (push_unregister(&c, sp->url_base, sp->consumer,
                             sp->ephemeral) != 200)
-            fprintf(stderr, "bjmsg: could not unregister '%s'; the broker "
+            fprintf(stderr, "sukkal: could not unregister '%s'; the broker "
                             "will keep trying to deliver to %s until it is "
-                            "removed (bjmsg push --consumer %s --delete)\n",
+                            "removed (sukkal push --consumer %s --delete)\n",
                     sp->consumer, self, sp->consumer);
     }
 
@@ -992,14 +992,14 @@ int bjm_cmd_sub(int argc, char **argv) {
         } else if (strcmp(a, "--retry") == 0) {
             const char *v = arg_value(argc, argv, &i, "--retry");
             if (!v || parse_ms(v, &retry_ms) != 0) {
-                fprintf(stderr, "bjmsg: --retry needs a millisecond count "
+                fprintf(stderr, "sukkal: --retry needs a millisecond count "
                                 "(0 to disable)\n");
                 return 2;
             }
         } else if (strcmp(a, "--heartbeat") == 0) {
             const char *v = arg_value(argc, argv, &i, "--heartbeat");
             if (!v || parse_ms(v, &heartbeat_ms) != 0) {
-                fprintf(stderr, "bjmsg: --heartbeat needs a millisecond "
+                fprintf(stderr, "sukkal: --heartbeat needs a millisecond "
                                 "count (0 to disable)\n");
                 return 2;
             }
@@ -1016,7 +1016,7 @@ int bjm_cmd_sub(int argc, char **argv) {
             if (strcmp(a, "--max") == 0) {
                 batch = strtoull(v, NULL, 10);
             } else {
-                fprintf(stderr, "bjmsg: --interval no longer does anything — "
+                fprintf(stderr, "sukkal: --interval no longer does anything — "
                                 "messages are pushed, so there is no poll to "
                                 "pace\n");
             }
@@ -1024,12 +1024,12 @@ int bjm_cmd_sub(int argc, char **argv) {
             sub_usage();
             return 0;
         } else if (a[0] == '-' && a[1] != '\0') {
-            fprintf(stderr, "bjmsg: unknown option %s\n", a);
+            fprintf(stderr, "sukkal: unknown option %s\n", a);
             return 2;
         } else if (!subject) {
             subject = a;
         } else {
-            fprintf(stderr, "bjmsg: unexpected argument %s\n", a);
+            fprintf(stderr, "sukkal: unexpected argument %s\n", a);
             return 2;
         }
     }
@@ -1037,21 +1037,21 @@ int bjm_cmd_sub(int argc, char **argv) {
     if (!subject) { sub_usage(); return 2; }
     int is_pattern = bjm_pattern_is(subject);
     if (is_pattern ? !bjm_pattern_valid(subject) : !bjm_subject_valid(subject)) {
-        fprintf(stderr, "bjmsg: invalid %s '%s'\n",
+        fprintf(stderr, "sukkal: invalid %s '%s'\n",
                 is_pattern ? "pattern" : "subject", subject);
         return 2;
     }
     if (consumer && !bjm_consumer_valid(consumer)) {
-        fprintf(stderr, "bjmsg: invalid consumer '%s'\n", consumer);
+        fprintf(stderr, "sukkal: invalid consumer '%s'\n", consumer);
         return 2;
     }
     if (callback && !bjm_callback_valid(callback)) {
-        fprintf(stderr, "bjmsg: --callback must be an http:// or https:// "
+        fprintf(stderr, "sukkal: --callback must be an http:// or https:// "
                         "URL of printable, space-free characters\n");
         return 2;
     }
     if (token && !bjm_token_valid(token)) {
-        fprintf(stderr, "bjmsg: --token must be up to %d printable, "
+        fprintf(stderr, "sukkal: --token must be up to %d printable, "
                         "space-free bytes\n", BJM_TOKEN_MAX);
         return 2;
     }
@@ -1065,7 +1065,7 @@ int bjm_cmd_sub(int argc, char **argv) {
     int ephemeral = (consumer == NULL);
     if (receiver_identity(&consumer, generated, sizeof generated, "sub",
                           &token, auto_token, sizeof auto_token) != 0) {
-        fprintf(stderr, "bjmsg: cannot read /dev/urandom\n");
+        fprintf(stderr, "sukkal: cannot read /dev/urandom\n");
         return 1;
     }
 
@@ -1161,7 +1161,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
         } else if (strcmp(a, "--max-age") == 0) {
             const char *v = arg_value(argc, argv, &i, "--max-age");
             if (!v || parse_duration(v, &o->max_age) != 0) {
-                fprintf(stderr, "bjmsg: --max-age wants a duration like "
+                fprintf(stderr, "sukkal: --max-age wants a duration like "
                                 "90, 30m, 12h, 7d, 2w\n");
                 return 2;
             }
@@ -1172,7 +1172,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
         } else if (strcmp(a, "--max-bytes") == 0) {
             const char *v = arg_value(argc, argv, &i, "--max-bytes");
             if (!v || parse_size(v, &o->max_bytes) != 0) {
-                fprintf(stderr, "bjmsg: --max-bytes wants a size like "
+                fprintf(stderr, "sukkal: --max-bytes wants a size like "
                                 "4096, 512K, 100M, 2G\n");
                 return 2;
             }
@@ -1188,7 +1188,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
             const char *v = arg_value(argc, argv, &i, "--timeout");
             uint64_t secs;
             if (!v || parse_duration(v, &secs) != 0) {
-                fprintf(stderr, "bjmsg: --timeout wants a duration like 5s\n");
+                fprintf(stderr, "sukkal: --timeout wants a duration like 5s\n");
                 return 2;
             }
             o->timeout_ms = secs * 1000;
@@ -1204,7 +1204,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
             const char *v = arg_value(argc, argv, &i, "--lease");
             uint64_t secs;
             if (!v || parse_duration(v, &secs) != 0) {
-                fprintf(stderr, "bjmsg: --lease wants a duration like "
+                fprintf(stderr, "sukkal: --lease wants a duration like "
                                 "30s, 5m, or 0 to disable leasing\n");
                 return 2;
             }
@@ -1214,7 +1214,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
             const char *v = arg_value(argc, argv, &i, "--backoff");
             uint64_t secs;
             if (!v || parse_duration(v, &secs) != 0) {
-                fprintf(stderr, "bjmsg: --backoff wants a duration like "
+                fprintf(stderr, "sukkal: --backoff wants a duration like "
                                 "1s, 30s, or 0 to retry instantly\n");
                 return 2;
             }
@@ -1224,7 +1224,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
             const char *v = arg_value(argc, argv, &i, "--max-backoff");
             uint64_t secs;
             if (!v || parse_duration(v, &secs) != 0) {
-                fprintf(stderr, "bjmsg: --max-backoff wants a duration\n");
+                fprintf(stderr, "sukkal: --max-backoff wants a duration\n");
                 return 2;
             }
             o->max_backoff_ms = secs * 1000;
@@ -1233,7 +1233,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
             const char *v = arg_value(argc, argv, &i, "--delay");
             uint64_t secs;
             if (!v || parse_duration(v, &secs) != 0) {
-                fprintf(stderr, "bjmsg: --delay wants a duration like 30s\n");
+                fprintf(stderr, "sukkal: --delay wants a duration like 30s\n");
                 return 2;
             }
             o->delay_ms = secs * 1000;
@@ -1247,7 +1247,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
             /* Accepted so existing scripts still run, and ignored:
              * nothing polls any more, so there is no interval to set. */
             if (!arg_value(argc, argv, &i, "--interval")) return 2;
-            fprintf(stderr, "bjmsg: --interval no longer does anything — "
+            fprintf(stderr, "sukkal: --interval no longer does anything — "
                             "messages are pushed, not polled\n");
         } else if (strcmp(a, "--bind") == 0) {
             if (!(o->bind_addr = arg_value(argc, argv, &i, "--bind"))) return 2;
@@ -1270,7 +1270,7 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
         } else if (strcmp(a, "--retry") == 0) {
             const char *v = arg_value(argc, argv, &i, "--retry");
             if (!v || parse_ms(v, &o->retry_ms) != 0) {
-                fprintf(stderr, "bjmsg: --retry needs a millisecond count "
+                fprintf(stderr, "sukkal: --retry needs a millisecond count "
                                 "(0 to disable)\n");
                 return 2;
             }
@@ -1278,14 +1278,14 @@ static int query_parse(int argc, char **argv, query_opts *o, const char *usage) 
             fputs(usage, stderr);
             return 1;
         } else if (a[0] == '-' && a[1] != '\0') {
-            fprintf(stderr, "bjmsg: unknown option %s\n", a);
+            fprintf(stderr, "sukkal: unknown option %s\n", a);
             return 2;
         } else if (!o->subject) {
             o->subject = a;
         } else if (!o->text) {
             o->text = a;
         } else {
-            fprintf(stderr, "bjmsg: unexpected argument %s\n", a);
+            fprintf(stderr, "sukkal: unexpected argument %s\n", a);
             return 2;
         }
     }
@@ -1322,7 +1322,7 @@ static int query_run(const query_opts *o, const char *method, const char *url) {
 }
 
 #define CONSUMERS_USAGE \
-    "usage: bjmsg consumers [--url URL] [--retry MS] <subject>\n"
+    "usage: sukkal consumers [--url URL] [--retry MS] <subject>\n"
 
 int bjm_cmd_consumers(int argc, char **argv) {
     query_opts o;
@@ -1339,7 +1339,7 @@ int bjm_cmd_consumers(int argc, char **argv) {
 }
 
 #define PUSH_USAGE \
-    "usage: bjmsg push [--url URL] [--consumer NAME --delete]\n" \
+    "usage: sukkal push [--url URL] [--consumer NAME --delete]\n" \
     "\n" \
     "Without arguments, list the broker's push subscriptions and how each\n" \
     "is faring: how many messages it has taken, whether a delivery is in\n" \
@@ -1347,7 +1347,7 @@ int bjm_cmd_consumers(int argc, char **argv) {
     "\n" \
     "--consumer NAME --delete unregisters one, which is how you retire a\n" \
     "subscriber that went away without saying so. Its read receipt is\n" \
-    "kept; bjmsg unsubscribe discards that too.\n"
+    "kept; sukkal unsubscribe discards that too.\n"
 
 int bjm_cmd_push(int argc, char **argv) {
     query_opts o;
@@ -1368,7 +1368,7 @@ int bjm_cmd_push(int argc, char **argv) {
 }
 
 #define UNSUB_USAGE \
-    "usage: bjmsg unsubscribe [--url URL] <subject> --consumer NAME\n" \
+    "usage: sukkal unsubscribe [--url URL] <subject> --consumer NAME\n" \
     "\n" \
     "Forget a durable subscription. Its read receipt is deleted, so a\n" \
     "subscriber rejoining under that name starts fresh.\n"
@@ -1433,7 +1433,7 @@ static int parse_size(const char *v, uint64_t *out) {
 }
 
 #define POLICY_USAGE \
-    "usage: bjmsg policy [--url URL] [<subject> [options]]\n" \
+    "usage: sukkal policy [--url URL] [<subject> [options]]\n" \
     "\n" \
     "  (no subject)          list every subject that has a policy\n" \
     "  <subject>             show that subject's policy\n" \
@@ -1486,7 +1486,7 @@ int bjm_cmd_policy(int argc, char **argv) {
 /* ---- queue groups ------------------------------------------------------ */
 
 #define QUEUE_USAGE \
-    "usage: bjmsg queue [--url URL] <subject> [--group G [--lease D]\n" \
+    "usage: sukkal queue [--url URL] <subject> [--group G [--lease D]\n" \
     "                   [--delete]]\n" \
     "\n" \
     "  (no --group)   show every queue group on the subject\n" \
@@ -1548,10 +1548,10 @@ static void take_url(char *url, size_t cap, const query_opts *o, int max) {
 }
 
 #define TAKE_USAGE \
-    "usage: bjmsg take [--url URL] <subject> --group G [--max N] [--lease D]\n" \
+    "usage: sukkal take [--url URL] <subject> --group G [--max N] [--lease D]\n" \
     "\n" \
     "Lease jobs and print them as <index><tab><payload>. Each stays\n" \
-    "leased until `bjmsg done` finishes it, `bjmsg fail` returns it, or\n" \
+    "leased until `sukkal done` finishes it, `sukkal fail` returns it, or\n" \
     "the lease expires and it goes back to the queue.\n"
 
 int bjm_cmd_take(int argc, char **argv) {
@@ -1592,7 +1592,7 @@ int bjm_cmd_take(int argc, char **argv) {
 }
 
 #define JOBEND_USAGE(verb) \
-    "usage: bjmsg " verb " [--url URL] <subject> --group G --index N\n" \
+    "usage: sukkal " verb " [--url URL] <subject> --group G --index N\n" \
     "                 [--delay D]\n" \
     "\n" \
     "--delay overrides the group's backoff for this one job.\n"
@@ -1638,7 +1638,7 @@ int bjm_cmd_fail(int argc, char **argv) {
  * which ones did. With one job per delivery — the default, and what
  * spreads a queue evenly across workers — 2xx finishes it and anything
  * else returns it. Asking for more (--max) trades that for fewer round
- * trips, and X-Bjmsg-Done then names the ones that succeeded.
+ * trips, and X-Sukkal-Done then names the ones that succeeded.
  */
 typedef struct {
     char      key[16];
@@ -1674,7 +1674,7 @@ typedef struct {
     char        token[BJM_TOKEN_MAX + 1];
     const char *exec;
     const char *group;
-    /* Indexes finished in this delivery, rendered into X-Bjmsg-Done. */
+    /* Indexes finished in this delivery, rendered into X-Sukkal-Done. */
     char        done[16 * BJM_PUSH_JOBS_MAX];
     size_t      done_len;
     int         ndone, nfailed;
@@ -1683,18 +1683,18 @@ typedef struct {
 /* One job: environment, handler, verdict. */
 static int run_job(worker *w, const char *subject, const job *j) {
     char env[32];
-    setenv("BJMSG_SUBJECT", subject, 1);
-    setenv("BJMSG_GROUP", w->group, 1);
+    setenv("SUKKAL_SUBJECT", subject, 1);
+    setenv("SUKKAL_GROUP", w->group, 1);
     snprintf(env, sizeof env, "%lld", j->index);
-    setenv("BJMSG_INDEX", env, 1);
+    setenv("SUKKAL_INDEX", env, 1);
     /* >1 means this job was run before and its lease expired — the signal
      * a handler needs to decide whether to guard itself. */
     snprintf(env, sizeof env, "%lld", j->attempts);
-    setenv("BJMSG_ATTEMPTS", env, 1);
+    setenv("SUKKAL_ATTEMPTS", env, 1);
 
     FILE *child = popen(w->exec, "w");
     if (!child) {
-        fprintf(stderr, "bjmsg: cannot run '%s'\n", w->exec);
+        fprintf(stderr, "sukkal: cannot run '%s'\n", w->exec);
         return 0;
     }
     if (j->feed.len) fwrite(j->feed.p, 1, j->feed.len, child);
@@ -1763,7 +1763,7 @@ static void h_job(http11c_request *req, http11c_response *res) {
         }
     }
 
-    const char *subject = http11c_req_header(req, "X-Bjmsg-Subject");
+    const char *subject = http11c_req_header(req, "X-Sukkal-Subject");
     size_t len = 0;
     const uint8_t *body = (const uint8_t *)http11c_req_body(req, &len);
     if (!body || len == 0) {
@@ -1805,13 +1805,13 @@ static void h_job(http11c_request *req, http11c_response *res) {
         return;
     }
     if (w->nfailed)
-        http11c_res_header(res, "X-Bjmsg-Done", w->done);
+        http11c_res_header(res, "X-Sukkal-Done", w->done);
     http11c_res_header(res, "Content-Type", "text/plain");
     http11c_res_text(res, 200, "");
 }
 
 #define WORK_USAGE \
-    "usage: bjmsg work [--url URL] <subject|pattern> --group G --exec CMD\n" \
+    "usage: sukkal work [--url URL] <subject|pattern> --group G --exec CMD\n" \
     "                  [--max N] [--port P] [--callback URL] [--token T]\n" \
     "                  [--consumer NAME] [--keep] [--retry MS]\n" \
     "\n" \
@@ -1820,8 +1820,8 @@ static void h_job(http11c_request *req, http11c_response *res) {
     "CMD for each. An idle queue costs nothing, and a job becomes available\n" \
     "the instant it is published.\n" \
     "\n" \
-    "The payload is written to CMD's stdin, and BJMSG_SUBJECT /\n" \
-    "BJMSG_GROUP / BJMSG_INDEX / BJMSG_ATTEMPTS are set in its\n" \
+    "The payload is written to CMD's stdin, and SUKKAL_SUBJECT /\n" \
+    "SUKKAL_GROUP / SUKKAL_INDEX / SUKKAL_ATTEMPTS are set in its\n" \
     "environment.\n" \
     "\n" \
     "CMD exiting 0 finishes the job; anything else returns it to the\n" \
@@ -1831,7 +1831,7 @@ static void h_job(http11c_request *req, http11c_response *res) {
     "\n" \
     "  --max N        jobs per delivery (default 1, which is what spreads\n" \
     "                 a queue evenly across workers)\n" \
-    "  --consumer N   name this worker, so `bjmsg push` identifies it\n"
+    "  --consumer N   name this worker, so `sukkal push` identifies it\n"
 
 int bjm_cmd_work(int argc, char **argv) {
     query_opts o;
@@ -1844,7 +1844,7 @@ int bjm_cmd_work(int argc, char **argv) {
     int is_pattern = bjm_pattern_is(o.subject);
     if (is_pattern ? !bjm_pattern_valid(o.subject)
                    : !bjm_subject_valid(o.subject)) {
-        fprintf(stderr, "bjmsg: invalid %s '%s'\n",
+        fprintf(stderr, "sukkal: invalid %s '%s'\n",
                 is_pattern ? "pattern" : "subject", o.subject);
         return 2;
     }
@@ -1853,7 +1853,7 @@ int bjm_cmd_work(int argc, char **argv) {
     char generated[BJM_CONSUMER_MAX + 1], auto_token[65];
     if (receiver_identity(&consumer, generated, sizeof generated, "work",
                           &token, auto_token, sizeof auto_token) != 0) {
-        fprintf(stderr, "bjmsg: cannot read /dev/urandom\n");
+        fprintf(stderr, "sukkal: cannot read /dev/urandom\n");
         return 1;
     }
 
@@ -1968,7 +1968,7 @@ static long publish_reply(client *c, const query_opts *o, const char *subject,
     snprintf(url, sizeof url, "%s/pub/%s?headers=1&id=reply.%s",
              o->url_base, subject, correlation);
     if (!c->headers) {
-        c->headers = curl_slist_append(NULL, "Content-Type: " BJMSG_MEDIA_TYPE);
+        c->headers = curl_slist_append(NULL, "Content-Type: " SUKKAL_MEDIA_TYPE);
         curl_easy_setopt(c->curl, CURLOPT_HTTPHEADER, c->headers);
     }
     curl_easy_setopt(c->curl, CURLOPT_CUSTOMREQUEST, NULL);
@@ -2072,7 +2072,7 @@ static void rr_binary(void *ctx, const uint8_t *b, uint32_t len) {
 
 
 #define REQUEST_USAGE \
-    "usage: bjmsg request [--url URL] <subject> <text> [--timeout D]\n" \
+    "usage: sukkal request [--url URL] <subject> <text> [--timeout D]\n" \
     "                     [--reply-to SUBJECT]\n" \
     "\n" \
     "Publish a request and wait for its reply. The request carries\n" \
@@ -2155,7 +2155,7 @@ int bjm_cmd_request(int argc, char **argv) {
     char generated[BJM_CONSUMER_MAX + 1], auto_token[65];
     if (receiver_identity(&consumer, generated, sizeof generated, "req",
                           &token, auto_token, sizeof auto_token) != 0) {
-        fprintf(stderr, "bjmsg: cannot read /dev/urandom\n");
+        fprintf(stderr, "sukkal: cannot read /dev/urandom\n");
         return 1;
     }
 
@@ -2176,7 +2176,7 @@ int bjm_cmd_request(int argc, char **argv) {
      */
     char local_ip[64] = "127.0.0.1";
     if (probe_local_ip(&c, o.url_base, local_ip, sizeof local_ip) != 0) {
-        fprintf(stderr, "bjmsg: cannot reach the broker at %s\n", o.url_base);
+        fprintf(stderr, "sukkal: cannot reach the broker at %s\n", o.url_base);
         client_free(&c);
         return 1;
     }
@@ -2188,7 +2188,7 @@ int bjm_cmd_request(int argc, char **argv) {
     http11c_route(srv, "POST", rq.path, h_awaited);
     if (http11c_listen(srv, o.bind_addr ? o.bind_addr : local_ip,
                        o.port) != 0) {
-        fprintf(stderr, "bjmsg: cannot listen for the reply\n");
+        fprintf(stderr, "sukkal: cannot listen for the reply\n");
         http11c_server_free(srv);
         client_free(&c);
         return 1;
@@ -2208,7 +2208,7 @@ int bjm_cmd_request(int argc, char **argv) {
     /* start=last: only replies published from here on can be ours. */
     if (push_register_at(&c, o.url_base, reply_to, consumer, NULL, self,
                          token, 0, 0, 1, 0) != 200) {
-        fprintf(stderr, "bjmsg: could not subscribe to %s\n", reply_to);
+        fprintf(stderr, "sukkal: could not subscribe to %s\n", reply_to);
         goto done;
     }
 
@@ -2229,7 +2229,7 @@ int bjm_cmd_request(int argc, char **argv) {
     char url[1024];
     snprintf(url, sizeof url, "%s/pub/%s?headers=1&id=req.%s",
              o.url_base, o.subject, corr);
-    c.headers = curl_slist_append(NULL, "Content-Type: " BJMSG_MEDIA_TYPE);
+    c.headers = curl_slist_append(NULL, "Content-Type: " SUKKAL_MEDIA_TYPE);
     curl_easy_setopt(c.curl, CURLOPT_HTTPHEADER, c.headers);
     curl_easy_setopt(c.curl, CURLOPT_HTTPGET, 0L);
     curl_easy_setopt(c.curl, CURLOPT_CUSTOMREQUEST, NULL);
@@ -2238,7 +2238,7 @@ int bjm_cmd_request(int argc, char **argv) {
     curl_easy_setopt(c.curl, CURLOPT_POSTFIELDSIZE, (long)len);
 
     if (client_perform(&c, url) != 200) {
-        fprintf(stderr, "bjmsg: request could not be published\n");
+        fprintf(stderr, "sukkal: request could not be published\n");
         bj_builder_free(b);
         goto done;
     }
@@ -2252,7 +2252,7 @@ int bjm_cmd_request(int argc, char **argv) {
     }
     if (rq.matched) rc = 0;
     else if (!g_stop)
-        fprintf(stderr, "bjmsg: no reply within %llums\n",
+        fprintf(stderr, "sukkal: no reply within %llums\n",
                 (unsigned long long)timeout_ms);
 
 done:
@@ -2268,7 +2268,7 @@ done:
 }
 
 #define REPLY_USAGE \
-    "usage: bjmsg reply [--url URL] <subject> --exec CMD [--group G]\n" \
+    "usage: sukkal reply [--url URL] <subject> --exec CMD [--group G]\n" \
     "                   [--port P] [--callback URL] [--token T]\n" \
     "\n" \
     "Serve requests on <subject>: run CMD for each, publish its stdout to\n" \
@@ -2355,7 +2355,7 @@ static void h_reply(http11c_request *req, http11c_response *res) {
             const uint8_t *rdata = bj_builder_data(rb, &rlen);
             if (rdata && publish_reply(&w->pub, &w->o, reply_to, corr,
                                        rdata, rlen) != 200) {
-                fprintf(stderr, "bjmsg: could not publish the reply\n");
+                fprintf(stderr, "sukkal: could not publish the reply\n");
                 ok = 0;
             } else if (rdata) {
                 replied = 1;
@@ -2391,7 +2391,7 @@ int bjm_cmd_reply(int argc, char **argv) {
     char generated[BJM_CONSUMER_MAX + 1], auto_token[65];
     if (receiver_identity(&consumer, generated, sizeof generated, "reply",
                           &token, auto_token, sizeof auto_token) != 0) {
-        fprintf(stderr, "bjmsg: cannot read /dev/urandom\n");
+        fprintf(stderr, "sukkal: cannot read /dev/urandom\n");
         return 1;
     }
 
@@ -2446,7 +2446,7 @@ int bjm_cmd_reply(int argc, char **argv) {
  */
 static int run_filter(const char *cmd, const uint8_t *in, size_t in_len,
                       buf *out) {
-    char path[] = "/tmp/bjmsg-in-XXXXXX";
+    char path[] = "/tmp/sukkal-in-XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) return -1;
     if (in_len && write(fd, in, in_len) != (ssize_t)in_len) {
@@ -2525,7 +2525,7 @@ static void feed_for(const uint8_t *payload, size_t plen, int raw, buf *out) {
 }
 
 #define PIPE_USAGE \
-    "usage: bjmsg pipe [--url URL] <in-subject> --consumer NAME\n" \
+    "usage: sukkal pipe [--url URL] <in-subject> --consumer NAME\n" \
     "                  --to <out-subject> --exec CMD [--raw]\n" \
     "                  [--port P] [--callback URL] [--token T]\n" \
     "\n" \
@@ -2574,16 +2574,16 @@ static int pipe_one(piper *pp, const uint8_t *payload, size_t plen) {
     feed_for(payload, plen, o->raw, &feed);
 
     char env[32];
-    setenv("BJMSG_SUBJECT", o->subject, 1);
-    setenv("BJMSG_CONSUMER", o->consumer, 1);
+    setenv("SUKKAL_SUBJECT", o->subject, 1);
+    setenv("SUKKAL_CONSUMER", o->consumer, 1);
     snprintf(env, sizeof env, "%lld", pp->index);
-    setenv("BJMSG_INDEX", env, 1);
+    setenv("SUKKAL_INDEX", env, 1);
 
     int st = run_filter(o->exec, feed.p, feed.len, &pp->outbuf);
     buf_free(&feed);
 
     if (st != 0) {
-        fprintf(stderr, "bjmsg: %lld failed (exit %d), not acknowledged\n",
+        fprintf(stderr, "sukkal: %lld failed (exit %d), not acknowledged\n",
                 pp->index, st);
         return 0;
     }
@@ -2629,7 +2629,7 @@ static int pipe_one(piper *pp, const uint8_t *payload, size_t plen) {
     curl_easy_setopt(pp->pub.curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
     if (!pp->pub.headers) {
         pp->pub.headers = curl_slist_append(NULL,
-                                            "Content-Type: " BJMSG_MEDIA_TYPE);
+                                            "Content-Type: " SUKKAL_MEDIA_TYPE);
         curl_easy_setopt(pp->pub.curl, CURLOPT_HTTPHEADER, pp->pub.headers);
     }
 
@@ -2712,7 +2712,7 @@ static void h_pipe(http11c_request *req, http11c_response *res) {
      */
     char ack[32];
     snprintf(ack, sizeof ack, "%llu", (unsigned long long)pp->took);
-    http11c_res_header(res, "X-Bjmsg-Ack", ack);
+    http11c_res_header(res, "X-Sukkal-Ack", ack);
     http11c_res_header(res, "Content-Type", "text/plain");
     http11c_res_text(res, 200, "");
 }
@@ -2733,7 +2733,7 @@ int bjm_cmd_pipe(int argc, char **argv) {
     char generated[BJM_CONSUMER_MAX + 1], auto_token[65];
     if (receiver_identity(&consumer, generated, sizeof generated, "pipe",
                           &token, auto_token, sizeof auto_token) != 0) {
-        fprintf(stderr, "bjmsg: cannot read /dev/urandom\n");
+        fprintf(stderr, "sukkal: cannot read /dev/urandom\n");
         return 1;
     }
 
@@ -2858,12 +2858,12 @@ static void d_envelope(void *ctx, const uint8_t *bytes, uint32_t len) {
 }
 
 #define DEAD_USAGE \
-    "usage: bjmsg dead [--url URL] <subject> [--from N]\n" \
+    "usage: sukkal dead [--url URL] <subject> [--from N]\n" \
     "\n" \
     "Show <subject>.dead: jobs a queue group gave up on, one per line as\n" \
     "  <dead index> <group> orig=<index> attempts=<n> <payload>\n" \
     "\n" \
-    "Put one back with: bjmsg requeue <subject> --index <dead index>\n"
+    "Put one back with: sukkal requeue <subject> --index <dead index>\n"
 
 int bjm_cmd_dead(int argc, char **argv) {
     query_opts o;
@@ -2904,10 +2904,10 @@ int bjm_cmd_dead(int argc, char **argv) {
 }
 
 #define REQUEUE_USAGE \
-    "usage: bjmsg requeue [--url URL] <subject> --index N\n" \
+    "usage: sukkal requeue [--url URL] <subject> --index N\n" \
     "\n" \
     "Publish a dead-lettered message back to its subject. N is the index\n" \
-    "in <subject>.dead, the first column of `bjmsg dead`. The message is\n" \
+    "in <subject>.dead, the first column of `sukkal dead`. The message is\n" \
     "appended with a new index; the dead-letter record stays put.\n"
 
 int bjm_cmd_requeue(int argc, char **argv) {
@@ -2926,7 +2926,7 @@ int bjm_cmd_requeue(int argc, char **argv) {
 }
 
 #define SEEK_USAGE \
-    "usage: bjmsg seek [--url URL] <subject> --consumer NAME --index N\n" \
+    "usage: sukkal seek [--url URL] <subject> --consumer NAME --index N\n" \
     "\n" \
     "Move a subscription's read receipt forward to N — how a consumer\n" \
     "left behind by a trim gets going again. Receipts never move\n" \
@@ -2950,7 +2950,7 @@ int bjm_cmd_seek(int argc, char **argv) {
 }
 
 #define SUBJECTS_USAGE \
-    "usage: bjmsg subjects [--url URL] [--retry MS] [<pattern>]\n" \
+    "usage: sukkal subjects [--url URL] [--retry MS] [<pattern>]\n" \
     "\n" \
     "With no pattern, every subject. A pattern matches token-wise on '.':\n" \
     "'*' is one token, '>' is this one and everything below it.\n"
@@ -2979,7 +2979,7 @@ int bjm_cmd_subjects(int argc, char **argv) {
     return query_run(&o, NULL, url);
 }
 
-#define INFO_USAGE "usage: bjmsg info [--url URL] [--retry MS] <subject>\n"
+#define INFO_USAGE "usage: sukkal info [--url URL] [--retry MS] <subject>\n"
 
 int bjm_cmd_info(int argc, char **argv) {
     query_opts o;
@@ -2995,7 +2995,7 @@ int bjm_cmd_info(int argc, char **argv) {
     return query_run(&o, NULL, url);
 }
 
-#define HEALTH_USAGE "usage: bjmsg health [--url URL] [--retry MS]\n"
+#define HEALTH_USAGE "usage: sukkal health [--url URL] [--retry MS]\n"
 
 int bjm_cmd_health(int argc, char **argv) {
     query_opts o;
@@ -3008,7 +3008,7 @@ int bjm_cmd_health(int argc, char **argv) {
 }
 
 #define TRIM_USAGE \
-    "usage: bjmsg trim [--url URL] <subject> (--before N | --keep N) [--force]\n" \
+    "usage: sukkal trim [--url URL] <subject> (--before N | --keep N) [--force]\n" \
     "\n" \
     "  --before N  discard messages with an index below N\n" \
     "  --keep N    keep only the newest N messages\n" \

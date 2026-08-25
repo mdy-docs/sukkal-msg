@@ -17,7 +17,7 @@
  * syscall every couple of milliseconds, not a request on a wire. Exposing
  * that fd upstream would remove even the tick; see README.
  */
-#include "bjmsg.h"
+#include "sukkal.h"
 
 #include "binjson.h"
 
@@ -67,7 +67,7 @@ typedef struct {
     uint8_t *body;
     size_t   body_len, body_cap;
 
-    /* X-Bjmsg-Ack from the response: "I took this far", which lets a
+    /* X-Sukkal-Ack from the response: "I took this far", which lets a
      * subscriber accept part of a batch instead of all or nothing. */
     uint64_t ack_hint;
     int      has_ack_hint;
@@ -76,7 +76,7 @@ typedef struct {
 
     /*
      * A worker delivery instead of a subscriber one: the jobs leased for
-     * it, and X-Bjmsg-Done naming those the worker actually finished. A
+     * it, and X-Sukkal-Done naming those the worker actually finished. A
      * receipt cannot express this — jobs complete out of order — so each
      * index is settled individually when the reply comes back.
      */
@@ -199,10 +199,10 @@ static size_t hdr_is(const char *data, size_t n, const char *name) {
 static size_t on_hdr(char *data, size_t size, size_t nmemb, void *user) {
     psub *s = user;
     size_t n = size * nmemb, at;
-    if ((at = hdr_is(data, n, "x-bjmsg-ack:"))) {
+    if ((at = hdr_is(data, n, "x-sukkal-ack:"))) {
         s->ack_hint = strtoull(data + at, NULL, 10);
         s->has_ack_hint = 1;
-    } else if ((at = hdr_is(data, n, "x-bjmsg-done:"))) {
+    } else if ((at = hdr_is(data, n, "x-sukkal-done:"))) {
         /* A comma-separated list of the jobs the worker actually
          * finished. Absent means all of them. */
         s->has_done_list = 1;
@@ -408,22 +408,22 @@ static int send_batch(bjm_pusher *p, psub *s, int count) {
     snprintf(s->url, sizeof s->url, "%s", s->cfg.callback);
 
     if (s->hdrs) { curl_slist_free_all(s->hdrs); s->hdrs = NULL; }
-    hdr_add(&s->hdrs, "Content-Type: %s", BJMSG_MEDIA_TYPE);
-    hdr_add(&s->hdrs, "X-Bjmsg-Subject: %s", s->subject);
-    hdr_add(&s->hdrs, "X-Bjmsg-Consumer: %s", s->consumer);
-    hdr_add(&s->hdrs, "X-Bjmsg-Count: %d", count);
-    hdr_add(&s->hdrs, "X-Bjmsg-First-Index: %llu",
+    hdr_add(&s->hdrs, "Content-Type: %s", SUKKAL_MEDIA_TYPE);
+    hdr_add(&s->hdrs, "X-Sukkal-Subject: %s", s->subject);
+    hdr_add(&s->hdrs, "X-Sukkal-Consumer: %s", s->consumer);
+    hdr_add(&s->hdrs, "X-Sukkal-Count: %d", count);
+    hdr_add(&s->hdrs, "X-Sukkal-First-Index: %llu",
             (unsigned long long)s->first);
-    hdr_add(&s->hdrs, "X-Bjmsg-Last-Index: %llu",
+    hdr_add(&s->hdrs, "X-Sukkal-Last-Index: %llu",
             (unsigned long long)s->last);
     if (s->cfg.group[0])
-        hdr_add(&s->hdrs, "X-Bjmsg-Group: %s", s->cfg.group);
+        hdr_add(&s->hdrs, "X-Sukkal-Group: %s", s->cfg.group);
     else
         /* How much is still waiting after this batch, so a subscriber can
          * tell "keep up" from "catch up" without asking. A queue has no
          * such number to give: what is waiting is whatever no other
          * worker has taken by the time this one asks. */
-        hdr_add(&s->hdrs, "X-Bjmsg-Lag: %llu", (unsigned long long)s->lag);
+        hdr_add(&s->hdrs, "X-Sukkal-Lag: %llu", (unsigned long long)s->lag);
     if (s->cfg.token[0])
         hdr_add(&s->hdrs, "Authorization: Bearer %s", s->cfg.token);
     /* libcurl adds Expect: 100-continue to larger POSTs and then waits a
@@ -562,7 +562,7 @@ static int start_delivery(bjm_pusher *p, psub *s) {
          * would make the gap invisible.
          */
         if (acked < base) {
-            fprintf(stderr, "bjmsg: push %s: %s: %llu message(s) were "
+            fprintf(stderr, "sukkal: push %s: %s: %llu message(s) were "
                             "trimmed before delivery; resuming at %llu\n",
                     s->consumer, name, (unsigned long long)(base - acked),
                     (unsigned long long)(base + 1));
@@ -643,7 +643,7 @@ static void finish_jobs(bjm_pusher *p, psub *s, CURLcode rc, long status,
         snprintf(s->last_error, sizeof s->last_error, "%s",
                  curl_easy_strerror(rc));
         if (s->failures == 0)
-            fprintf(stderr, "bjmsg: work %s -> %s: %s (jobs left to their "
+            fprintf(stderr, "sukkal: work %s -> %s: %s (jobs left to their "
                             "leases; retrying)\n",
                     s->consumer, s->url, s->last_error);
         backoff(s, now);
@@ -686,7 +686,7 @@ static void finish_jobs(bjm_pusher *p, psub *s, CURLcode rc, long status,
     }
 
     if (s->failures) {
-        fprintf(stderr, "bjmsg: work %s -> %s: taking jobs again\n",
+        fprintf(stderr, "sukkal: work %s -> %s: taking jobs again\n",
                 s->consumer, s->url);
         s->failures = 0;
         s->last_error[0] = '\0';
@@ -724,13 +724,13 @@ static void finish(bjm_pusher *p, psub *s, CURLcode rc, uint64_t now) {
         backoff(s, now);
         /* Once per outage, not once per attempt. */
         if (s->failures == 1)
-            fprintf(stderr, "bjmsg: push %s -> %s: %s (retrying)\n",
+            fprintf(stderr, "sukkal: push %s -> %s: %s (retrying)\n",
                     s->consumer, s->url, s->last_error);
         return;
     }
 
     /*
-     * 2xx acknowledges the batch. X-Bjmsg-Ack narrows that to "I took up
+     * 2xx acknowledges the batch. X-Sukkal-Ack narrows that to "I took up
      * to here", which is how a subscriber accepts part of one: the rest
      * is simply redelivered, since the receipt is the only record of what
      * was taken.
@@ -757,7 +757,7 @@ static void finish(bjm_pusher *p, psub *s, CURLcode rc, uint64_t now) {
     }
 
     if (s->failures) {
-        fprintf(stderr, "bjmsg: push %s -> %s: delivering again\n",
+        fprintf(stderr, "sukkal: push %s -> %s: delivering again\n",
                 s->consumer, s->url);
         s->failures = 0;
         s->last_error[0] = '\0';

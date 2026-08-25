@@ -6,7 +6,7 @@
  */
 import { Client } from '../src/index.js';
 
-const client = new Client({ url: process.env.BJMSG_URL ?? 'http://127.0.0.1:8080' });
+const client = new Client({ url: process.env.SUKKAL_URL ?? 'http://127.0.0.1:8080' });
 
 const messages = process.argv.slice(2).length
   ? process.argv.slice(2)

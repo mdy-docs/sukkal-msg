@@ -6,8 +6,8 @@ import threading
 
 import pytest
 
-from bjmsg import BjmsgError, Client
-from bjmsg.binjson import decode
+from sukkal import SukkalError, Client
+from sukkal.binjson import decode
 
 from .conftest import wait_for
 
@@ -226,7 +226,7 @@ def test_request_reply_matches_on_correlation(client, make_client):
 
 
 def test_request_times_out_when_nobody_answers(client):
-    with pytest.raises(BjmsgError, match="within 0.3s"):
+    with pytest.raises(SukkalError, match="within 0.3s"):
         client.request("t.silent", "anyone?", timeout=0.3)
 
 
@@ -270,11 +270,11 @@ def test_a_dropped_message_still_acknowledges_the_input(client, make_client):
 
 
 def test_errors_carry_the_brokers_own_explanation(client):
-    with pytest.raises(BjmsgError) as caught:
+    with pytest.raises(SukkalError) as caught:
         client.info("no.such.subject")
     assert caught.value.status == 404
 
-    with pytest.raises(BjmsgError, match="invalid subject"):
+    with pytest.raises(SukkalError, match="invalid subject"):
         client.publish("not a valid subject", "x")
 
 

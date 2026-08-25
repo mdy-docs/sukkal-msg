@@ -12,7 +12,7 @@ import https from 'node:https';
 
 import { decode } from 'binjson';
 
-import { BjmsgError, BrokerUnreachable } from './errors.js';
+import { SukkalError, BrokerUnreachable } from './errors.js';
 
 export const MEDIA_TYPE = 'application/binjson';
 
@@ -59,7 +59,7 @@ export class Transport {
    * One request. Resolves to { status, headers, value } where `value` is
    * the decoded binjson body, or undefined when there is none.
    *
-   * A non-2xx is thrown as a BjmsgError carrying the broker's plain-text
+   * A non-2xx is thrown as a SukkalError carrying the broker's plain-text
    * explanation — success bodies are binjson and errors are text, which
    * is the whole of the protocol's error convention.
    */
@@ -124,7 +124,7 @@ export class Transport {
           res.on('end', () => {
             const raw = Buffer.concat(chunks);
             if (res.statusCode < 200 || res.statusCode >= 300) {
-              reject(new BjmsgError(
+              reject(new SukkalError(
                 raw.toString('utf8').trim() || `HTTP ${res.statusCode}`,
                 { status: res.statusCode, method, url: this.base.origin + target },
               ));
@@ -136,7 +136,7 @@ export class Transport {
               try {
                 value = decode(new Uint8Array(raw));
               } catch (cause) {
-                reject(new BjmsgError('broker sent undecodable binjson',
+                reject(new SukkalError('broker sent undecodable binjson',
                                       { cause }));
                 return;
               }

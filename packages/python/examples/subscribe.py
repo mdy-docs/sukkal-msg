@@ -1,6 +1,6 @@
 """A subscriber. Run the broker and the publisher alongside:
 
-    ../../bin/bjmsg serve &
+    ../../bin/sukkal serve &
     python examples/subscribe.py &
     python examples/publish.py
 """
@@ -9,11 +9,11 @@ import os
 import signal
 import threading
 
-from bjmsg import Client
+from sukkal import Client
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-client = Client(os.environ.get("BJMSG_URL", "http://127.0.0.1:8080"))
+client = Client(os.environ.get("SUKKAL_URL", "http://127.0.0.1:8080"))
 
 
 def show(msg):

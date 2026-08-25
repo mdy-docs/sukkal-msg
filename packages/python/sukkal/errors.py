@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-__all__ = ["BjmsgError", "BrokerUnreachable"]
+__all__ = ["SukkalError", "BrokerUnreachable"]
 
 
-class BjmsgError(Exception):
+class SukkalError(Exception):
     def __init__(
         self,
         message: str,
@@ -26,7 +26,7 @@ class BjmsgError(Exception):
         self.url = url
 
 
-class BrokerUnreachable(BjmsgError):
+class BrokerUnreachable(SukkalError):
     """The broker could not be reached at all — nothing was sent."""
 
     def __init__(self, origin: str, cause: BaseException):

@@ -6,15 +6,15 @@ set -euo pipefail
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$DEMO_DIR")"
 
-BJMSG="${BJMSG:-$ROOT/bin/bjmsg}"
+SUKKAL="${SUKKAL:-$ROOT/bin/sukkal}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8080}"
 URL="${URL:-http://$HOST:$PORT}"
 SUBJECT="${SUBJECT:-greet}"
 DATA_DIR="${DATA_DIR:-$DEMO_DIR/data}"
 
-if [ ! -x "$BJMSG" ]; then
-    echo "demo: $BJMSG not built yet — run 'make' in $ROOT first." >&2
+if [ ! -x "$SUKKAL" ]; then
+    echo "demo: $SUKKAL not built yet — run 'make' in $ROOT first." >&2
     exit 1
 fi
 

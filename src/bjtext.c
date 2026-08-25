@@ -5,7 +5,7 @@
  * the types JSON has no spelling for (BINARY, OID, DATE, POINTER) are
  * printed in an unambiguous but non-JSON form rather than lossily coerced.
  */
-#include "bjmsg.h"
+#include "sukkal.h"
 
 #include "binjson.h"
 

@@ -1,12 +1,12 @@
 /*
- * main.c — subcommand dispatch for the single bjmsg executable.
+ * main.c — subcommand dispatch for the single sukkal executable.
  *
  * The broker and the clients live in one binary on purpose: a node that
  * both serves subjects and subscribes to another node's is then a matter
  * of running both halves in one process, since http11c_poll embeds in a
  * host's own loop rather than owning it.
  */
-#include "bjmsg.h"
+#include "sukkal.h"
 
 #include <curl/curl.h>
 
@@ -15,42 +15,42 @@
 
 #define DEFAULT_HOST "127.0.0.1"
 #define DEFAULT_PORT 8080
-#define DEFAULT_DIR  "./bjmsg-data"
+#define DEFAULT_DIR  "./sukkal-data"
 
 static void usage(void) {
     fprintf(stderr,
-        "bjmsg — publish/subscribe over HTTP/1.1 with binjson payloads\n"
+        "sukkal — publish/subscribe over HTTP/1.1 with binjson payloads\n"
         "\n"
         "usage:\n"
-        "  bjmsg serve       [--host H] [--port P] [--dir D]\n"
-        "                    [--dedup-window SECONDS]\n"
-        "  bjmsg pub         [--url URL] <subject> (<text> | --int N | --file PATH)\n"
-        "  bjmsg sub         [--url URL] <subject> [--consumer NAME] [--tail]\n"
-        "                    [--port N] [--callback URL] [--exec CMD] [--keep]\n"
+        "  sukkal serve       [--host H] [--port P] [--dir D]\n"
+        "                     [--dedup-window SECONDS]\n"
+        "  sukkal pub         [--url URL] <subject> (<text> | --int N | --file PATH)\n"
+        "  sukkal sub         [--url URL] <subject> [--consumer NAME] [--tail]\n"
+        "                     [--port N] [--callback URL] [--exec CMD] [--keep]\n"
         "\n"
         "job queues (each message goes to one group member):\n"
-        "  bjmsg work        [--url URL] <subject> --group G --exec CMD [--max N]\n"
-        "  bjmsg take        [--url URL] <subject> --group G [--max N]\n"
-        "  bjmsg done        [--url URL] <subject> --group G --index N\n"
-        "  bjmsg fail        [--url URL] <subject> --group G --index N\n"
-        "  bjmsg queue       [--url URL] <subject> [--group G [--lease D]]\n"
-        "  bjmsg dead        [--url URL] <subject>\n"
-        "  bjmsg requeue     [--url URL] <subject> --index N\n"
-        "  bjmsg pipe        [--url URL] <in> --consumer N --to <out> --exec CMD\n"
-        "  bjmsg request     [--url URL] <subject> <text> [--timeout D]\n"
-        "  bjmsg reply       [--url URL] <subject> --exec CMD [--group G]\n"
+        "  sukkal work        [--url URL] <subject> --group G --exec CMD [--max N]\n"
+        "  sukkal take        [--url URL] <subject> --group G [--max N]\n"
+        "  sukkal done        [--url URL] <subject> --group G --index N\n"
+        "  sukkal fail        [--url URL] <subject> --group G --index N\n"
+        "  sukkal queue       [--url URL] <subject> [--group G [--lease D]]\n"
+        "  sukkal dead        [--url URL] <subject>\n"
+        "  sukkal requeue     [--url URL] <subject> --index N\n"
+        "  sukkal pipe        [--url URL] <in> --consumer N --to <out> --exec CMD\n"
+        "  sukkal request     [--url URL] <subject> <text> [--timeout D]\n"
+        "  sukkal reply       [--url URL] <subject> --exec CMD [--group G]\n"
         "\n"
         "query a running broker and exit:\n"
-        "  bjmsg health      [--url URL]\n"
-        "  bjmsg push        [--url URL] [--consumer NAME --delete]\n"
-        "  bjmsg subjects    [--url URL]\n"
-        "  bjmsg info        [--url URL] <subject>\n"
-        "  bjmsg consumers   [--url URL] <subject>\n"
-        "  bjmsg unsubscribe [--url URL] <subject> --consumer NAME\n"
-        "  bjmsg trim        [--url URL] <subject> (--before N | --keep N)\n"
-        "  bjmsg seek        [--url URL] <subject> --consumer NAME --index N\n"
-        "  bjmsg policy      [--url URL] [<subject> [--max-age D]\n"
-        "                    [--max-messages N] [--max-bytes S] [--clear]]\n"
+        "  sukkal health      [--url URL]\n"
+        "  sukkal push        [--url URL] [--consumer NAME --delete]\n"
+        "  sukkal subjects    [--url URL]\n"
+        "  sukkal info        [--url URL] <subject>\n"
+        "  sukkal consumers   [--url URL] <subject>\n"
+        "  sukkal unsubscribe [--url URL] <subject> --consumer NAME\n"
+        "  sukkal trim        [--url URL] <subject> (--before N | --keep N)\n"
+        "  sukkal seek        [--url URL] <subject> --consumer NAME --index N\n"
+        "  sukkal policy      [--url URL] [<subject> [--max-age D]\n"
+        "                     [--max-messages N] [--max-bytes S] [--clear]]\n"
         "\n"
         "Nothing polls. `sub`, `work`, `reply`, `pipe` and `request` each start a\n"
         "small HTTP server and register it as the callback the broker POSTs to,\n"
@@ -81,7 +81,7 @@ static int cmd_serve(int argc, char **argv) {
         else if (strcmp(a, "--dedup-window") == 0 && !last)
             dedup_window_s = atol(argv[++i]);
         else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) { usage(); return 0; }
-        else { fprintf(stderr, "bjmsg: bad argument %s\n", a); return 2; }
+        else { fprintf(stderr, "sukkal: bad argument %s\n", a); return 2; }
     }
     return bjm_serve(host, port, dir, (uint64_t)dedup_window_s * 1000);
 }
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
     /* Both halves need libcurl's global state now: the broker is an HTTP
      * client too, because that is how it delivers to a callback. */
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-        fprintf(stderr, "bjmsg: curl_global_init failed\n");
+        fprintf(stderr, "sukkal: curl_global_init failed\n");
         return 1;
     }
 
@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
     }
 
     curl_global_cleanup();
-    fprintf(stderr, "bjmsg: unknown command '%s'\n\n", cmd);
+    fprintf(stderr, "sukkal: unknown command '%s'\n\n", cmd);
     usage();
     return 2;
 }

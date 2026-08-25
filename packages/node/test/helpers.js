@@ -11,12 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-export const BROKER = join(here, '..', '..', '..', 'bin', 'bjmsg');
+export const BROKER = join(here, '..', '..', '..', 'bin', 'sukkal');
 
 export const hasBroker = existsSync(BROKER);
 
 export async function startBroker({ port = 0 } = {}) {
-  const dir = await mkdtemp(join(tmpdir(), 'bjmsg-node-'));
+  const dir = await mkdtemp(join(tmpdir(), 'sukkal-node-'));
   /* Port 0 would leave us guessing, so pick one in the ephemeral range
    * and let a collision surface as a failure to start. */
   const chosen = port || 20000 + Math.floor(Math.random() * 20000);

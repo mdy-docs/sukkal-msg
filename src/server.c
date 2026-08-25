@@ -17,13 +17,13 @@
  * client as well as a server, and bjm_serve's loop interleaves the two.
  *
  * GET /sub survives as the way to *read* a subject — for browsing, for
- * one-shot tools, for `bjmsg dead` — but nothing subscribes with it.
+ * one-shot tools, for `sukkal dead` — but nothing subscribes with it.
  *
  * Handlers run on the event loop, so nothing here may block. That is why
  * registering a subscription only records it: the first delivery happens
  * on the next pump, not inside the handler.
  */
-#include "bjmsg.h"
+#include "sukkal.h"
 
 #include "binjson.h"
 #include "http11c.h"
@@ -52,7 +52,7 @@ static http11c_server *g_srv;   /* for the signal handler only */
 
 static void res_bj(http11c_response *res, int code, const uint8_t *data, size_t len) {
     http11c_res_status(res, code);
-    http11c_res_header(res, "Content-Type", BJMSG_MEDIA_TYPE);
+    http11c_res_header(res, "Content-Type", SUKKAL_MEDIA_TYPE);
     http11c_res_write(res, data, len);
 }
 
@@ -134,8 +134,8 @@ static void h_publish(http11c_request *req, http11c_response *res) {
 
     char type[64];
     if (http11c_req_content_type(req, type, sizeof type) != 1 ||
-        strcmp(type, BJMSG_MEDIA_TYPE) != 0) {
-        res_err(res, 415, "expected Content-Type: " BJMSG_MEDIA_TYPE "\n");
+        strcmp(type, SUKKAL_MEDIA_TYPE) != 0) {
+        res_err(res, 415, "expected Content-Type: " SUKKAL_MEDIA_TYPE "\n");
         return;
     }
 
@@ -343,7 +343,7 @@ static void h_subscribe(http11c_request *req, http11c_response *res) {
          * looking for a subject that is right here. */
         res_err(res, 416, "those messages have been trimmed. Move on with "
                           "POST /ack/<subject>?consumer=&index= "
-                          "(bjmsg seek), or start over by deleting the "
+                          "(sukkal seek), or start over by deleting the "
                           "subscription\n");
         return;
     }
@@ -357,16 +357,16 @@ static void h_subscribe(http11c_request *req, http11c_response *res) {
      * decoding the body. */
     char buf[32];
     snprintf(buf, sizeof buf, "%d", count);
-    http11c_res_header(res, "X-Bjmsg-Count", buf);
+    http11c_res_header(res, "X-Sukkal-Count", buf);
     snprintf(buf, sizeof buf, "%llu", (unsigned long long)last);
-    http11c_res_header(res, "X-Bjmsg-Last-Index", buf);
+    http11c_res_header(res, "X-Sukkal-Last-Index", buf);
     if (skipped) {
         snprintf(buf, sizeof buf, "%llu", (unsigned long long)skipped);
-        http11c_res_header(res, "X-Bjmsg-Skipped", buf);
+        http11c_res_header(res, "X-Sukkal-Skipped", buf);
     }
     if (has_consumer) {
         snprintf(buf, sizeof buf, "%llu", (unsigned long long)acked);
-        http11c_res_header(res, "X-Bjmsg-Acked", buf);
+        http11c_res_header(res, "X-Sukkal-Acked", buf);
     }
 
     res_bj(res, 200, out, out_len);
@@ -777,7 +777,7 @@ static void h_take(http11c_request *req, http11c_response *res) {
 
     char buf[32];
     snprintf(buf, sizeof buf, "%d", count);
-    http11c_res_header(res, "X-Bjmsg-Count", buf);
+    http11c_res_header(res, "X-Sukkal-Count", buf);
     res_bj(res, 200, out, out_len);
 }
 
@@ -895,7 +895,7 @@ static void h_dead(http11c_request *req, http11c_response *res) {
         bj_end_array(b);
         out = bj_builder_data(b, &out_len);
         if (!out) { res_err(res, 500, "encode failed\n"); return; }
-        http11c_res_header(res, "X-Bjmsg-Count", "0");
+        http11c_res_header(res, "X-Sukkal-Count", "0");
         res_bj(res, 200, out, out_len);
         return;
     }
@@ -903,9 +903,9 @@ static void h_dead(http11c_request *req, http11c_response *res) {
 
     char buf[32];
     snprintf(buf, sizeof buf, "%d", count);
-    http11c_res_header(res, "X-Bjmsg-Count", buf);
+    http11c_res_header(res, "X-Sukkal-Count", buf);
     snprintf(buf, sizeof buf, "%llu", (unsigned long long)last);
-    http11c_res_header(res, "X-Bjmsg-Last-Index", buf);
+    http11c_res_header(res, "X-Sukkal-Last-Index", buf);
     res_bj(res, 200, out, out_len);
 }
 
@@ -918,7 +918,7 @@ static void h_requeue(http11c_request *req, http11c_response *res) {
     uint64_t index = query_u64(req, "index", 0);
     if (index == 0) {
         res_err(res, 400, "?index=<n> is required (the index in "
-                          "<subject>.dead, as shown by bjmsg dead)\n");
+                          "<subject>.dead, as shown by sukkal dead)\n");
         return;
     }
 
@@ -940,7 +940,7 @@ static void h_requeue(http11c_request *req, http11c_response *res) {
     }
     if (e == BJ_ERR_RANGE) {
         res_err(res, 416, "no such index in the dead-letter channel; "
-                          "bjmsg dead lists them\n");
+                          "sukkal dead lists them\n");
         return;
     }
     if (e) { res_err(res, status_for(e), "requeue failed\n"); return; }
@@ -1214,7 +1214,7 @@ int bjm_serve(const char *host, int port, const char *dir,
     app a = {0};
     a.store = bjm_store_open(dir);
     if (!a.store) {
-        fprintf(stderr, "bjmsg: cannot open store at %s\n", dir);
+        fprintf(stderr, "sukkal: cannot open store at %s\n", dir);
         return 1;
     }
     if (dedup_window_ms) bjm_dedup_set_window(a.store, dedup_window_ms);
@@ -1225,7 +1225,7 @@ int bjm_serve(const char *host, int port, const char *dir,
 
     a.push = bjm_pusher_new(a.store, DEFAULT_MAX_BATCH_BYTES);
     if (!a.push) {
-        fprintf(stderr, "bjmsg: cannot start the delivery engine\n");
+        fprintf(stderr, "sukkal: cannot start the delivery engine\n");
         bj_builder_free(a.bld);
         bjm_store_free(a.store);
         return 1;
@@ -1275,7 +1275,7 @@ int bjm_serve(const char *host, int port, const char *dir,
 
     int rc = 0;
     if (http11c_listen(s, host, port) != 0) {
-        fprintf(stderr, "bjmsg: cannot listen on %s:%d\n", host, port);
+        fprintf(stderr, "sukkal: cannot listen on %s:%d\n", host, port);
         rc = 1;
         goto done;
     }
@@ -1285,7 +1285,7 @@ int bjm_serve(const char *host, int port, const char *dir,
     signal(SIGTERM, on_signal);
     signal(SIGPIPE, SIG_IGN);
 
-    fprintf(stderr, "bjmsg: serving %s on http://%s:%d (%s), "
+    fprintf(stderr, "sukkal: serving %s on http://%s:%d (%s), "
                     "%d push subscription(s)\n",
             dir, host, http11c_port(s), http11c_backend(),
             bjm_pusher_count(a.push));
@@ -1311,13 +1311,13 @@ int bjm_serve(const char *host, int port, const char *dir,
         int trimmed = 0;
         int e = bjm_retention_run(a.store, (uint64_t)now, &removed, &trimmed);
         if (e)
-            fprintf(stderr, "bjmsg: retention sweep failed (%d)\n", e);
+            fprintf(stderr, "sukkal: retention sweep failed (%d)\n", e);
         else if (removed)
-            fprintf(stderr, "bjmsg: retention removed %llu message(s) "
+            fprintf(stderr, "sukkal: retention removed %llu message(s) "
                             "from %d subject(s)\n",
                     (unsigned long long)removed, trimmed);
     }
-    fprintf(stderr, "bjmsg: stopped\n");
+    fprintf(stderr, "sukkal: stopped\n");
 
 done:
     g_srv = NULL;

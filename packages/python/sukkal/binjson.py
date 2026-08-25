@@ -1,4 +1,4 @@
-"""binjson — the compact binary encoding bjmsg carries.
+"""binjson — the compact binary encoding sukkal carries.
 
 A port of the format specified in third_party/binjson/FORMAT.md, which is
 a contract rather than a description: every multi-byte scalar is

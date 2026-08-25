@@ -70,14 +70,14 @@ export function parseDelivery(buffer) {
 export function deliveryInfo(headers) {
   const num = (h) => (headers[h] === undefined ? undefined : Number(headers[h]));
   return {
-    subject: headers['x-bjmsg-subject'],
-    consumer: headers['x-bjmsg-consumer'],
-    group: headers['x-bjmsg-group'],
-    count: num('x-bjmsg-count'),
-    firstIndex: num('x-bjmsg-first-index'),
-    lastIndex: num('x-bjmsg-last-index'),
+    subject: headers['x-sukkal-subject'],
+    consumer: headers['x-sukkal-consumer'],
+    group: headers['x-sukkal-group'],
+    count: num('x-sukkal-count'),
+    firstIndex: num('x-sukkal-first-index'),
+    lastIndex: num('x-sukkal-last-index'),
     /** How many messages are still waiting behind this batch. */
-    lag: num('x-bjmsg-lag'),
+    lag: num('x-sukkal-lag'),
   };
 }
 
