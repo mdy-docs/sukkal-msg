@@ -397,11 +397,46 @@ Two things the implementation settled:
     second provider, which never saw the first, reads back. Memory is the
     one that forgets. Nothing sniffs the environment to choose.
 
-### Phase 5 — the WASM build and its JS package
+### Phase 5 — the WASM build and its JS package ✅
 
 `sukkal-wasm.js` mirroring nisaba's shape: `ready()`, a provider, and a
 `Broker` whose methods are the routes. Exit: publish and subscribe in Node
 with no binary, and in a browser tab, against all three providers.
+
+**Done for Node; the browser is untested.** `new Broker(provider)` publishes,
+subscribes, lists subjects and answers `/health` through the same routing
+table `sukkal serve` uses — one definition, no socket, nothing serialised.
+A broker on `NodeFSStorageProvider` is closed, reopened, and finds its
+messages and its place in the log. The OPFS provider is wired and has no
+reason not to work, but "no reason not to" is not a test, and there is no
+browser in this suite yet.
+
+The module grew 175KB → 239KB when the entry points were exported, which is
+the broker's own code no longer being dead-stripped.
+
+Three things the implementation settled, all about the plan/execute
+discipline being real rather than decorative:
+
+  - **Opening the store is itself an operation that touches files.** The
+    pusher reads its registrations as it is constructed, so `open()` plans
+    and opens the shared files *before* creating the broker — using the same
+    `sukkal_plan`, with a path that names no subject, rather than a second
+    list of names kept in JS.
+  - **The plan has to say which names may be CREATED.** A publish creates
+    its subject; a subscribe to an unknown one is a 404. Opening every
+    planned name with `create: true` made `GET /sub/never-published` answer
+    200 and bring the subject into being — and left a phantom
+    `<subject>.dead` in `/subjects` before anything had died. Each planned
+    name now carries `+` or `-`, decided in C with the rest of the naming.
+  - **A leak from Phase 1 surfaced here, not there.** `bjm_dir_listing` is
+    POSIX-only and was being called from `server.c` and `push.c` — both
+    portable. It linked fine natively and failed at the WASM link, which is
+    the only place it could have failed. Listings are a store hook now,
+    beside the clock and the atomic replace.
+
+`bjm_trim` refuses in WASM, as designed: there is no atomic replace, and
+improvising one would trade "the log stayed too long" for "the subject is
+gone".
 
 ### Phase 6 — mdy-bus gains an in-process transport
 

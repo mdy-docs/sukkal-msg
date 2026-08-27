@@ -73,6 +73,8 @@ struct bjm_store {
     int32_t   (*adopt_fn)(void *ctx, const char *from, uint32_t from_len,
                           const char *to, uint32_t to_len);
     void       *adopt_ctx;
+    int       (*listing_fn)(void *ctx, char **out, size_t *out_len, int *owned);
+    void       *listing_ctx;
     subject    *subs;
     size_t      nsubs, cap;
     bj_builder *bld;      /* scratch for bjm_subjects / bjm_consumers */
@@ -205,6 +207,18 @@ bjm_store *bjm_store_open_ns(bj_ns ns) {
 void bjm_store_set_clock(bjm_store *st, uint64_t (*now_ms)(void *ctx), void *ctx) {
     st->clock_fn = now_ms;
     st->clock_ctx = ctx;
+}
+
+void bjm_store_set_listing(bjm_store *st,
+                           int (*listing)(void *ctx, char **out, size_t *out_len, int *owned),
+                           void *ctx) {
+    st->listing_fn = listing;
+    st->listing_ctx = ctx;
+}
+
+int bjm_store_listing(bjm_store *st, char **out, size_t *out_len, int *owned) {
+    if (!st->listing_fn) return BJ_ERR_STATE;
+    return st->listing_fn(st->listing_ctx, out, out_len, owned);
 }
 
 uint64_t bjm_store_now_ms(bjm_store *st) {

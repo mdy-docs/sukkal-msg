@@ -39,6 +39,7 @@ COMMON_FLAGS=(
 
 # Read both manifests rather than restating them.
 STRUCT_EXPORTS=$(grep -v '^#' "$BJS/wasm/exports.txt" | grep -v '^$' | paste -sd, -)
+SUKKAL_EXPORTS=$(grep -v '^#' wasm/exports.txt | grep -v '^$' | paste -sd, -)
 
 EXPORTS='_malloc,_free,'\
 '_bjw_enc_reset,_bjw_put_null,_bjw_put_bool,_bjw_put_int,_bjw_put_float,'\
@@ -46,7 +47,7 @@ EXPORTS='_malloc,_free,'\
 '_bjw_put_key,_bjw_begin_array,_bjw_end_array,_bjw_begin_object,_bjw_end_object,'\
 '_bjw_enc_finish,_bjw_enc_ptr,_bjw_enc_size,'\
 '_bjw_decode,_bjw_events_ptr,_bjw_events_len,_bjw_consumed,_bjw_value_size,'\
-"$STRUCT_EXPORTS"
+"$STRUCT_EXPORTS,$SUKKAL_EXPORTS"
 
 SOURCES=("$BJ/src/binjson.c" "$BJ/src/binjson_wasm.c")
 while IFS= read -r line; do

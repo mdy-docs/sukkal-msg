@@ -159,13 +159,14 @@ static void nm_string(void *ctx, const uint8_t *v, uint32_t len) {
 static int names_load(bjm_pusher *p) {
     char *names = NULL;
     size_t names_len = 0;
-    int e = bjm_dir_listing(p->dir, &names, &names_len);
+    int owned = 0;
+    int e = bjm_store_listing(p->st, &names, &names_len, &owned);
     if (e) return e;
 
     const uint8_t *out = NULL;
     size_t out_len = 0;
     e = bjm_subjects(p->st, names, names_len, NULL, &out, &out_len);
-    free(names);
+    if (owned) free(names);
     if (e) return e;
     bj_visitor v = bjm_visitor_noop(p);
     v.on_string = nm_string;

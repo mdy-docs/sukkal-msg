@@ -1,0 +1,15 @@
+# sukkal's own WASM exports, one per line. Consumed by build-wasm.sh and
+# appended to binjson-structures' own list (wasm/exports.txt there).
+#
+# Only the entry points: everything else the broker does is reached
+# through sukkal_request, because the routing table is the API.
+_sukkal_wasm_open
+_sukkal_wasm_close
+_sukkal_wasm_set_clock
+_sukkal_wasm_set_listing
+_sukkal_plan
+_sukkal_request
+_sukkal_response_body
+_sukkal_response_len
+_sukkal_response_headers
+_sukkal_response_headers_len

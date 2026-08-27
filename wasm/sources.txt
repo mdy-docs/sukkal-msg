@@ -20,3 +20,7 @@ src/push.c
 #
 # bjtext.c is binjson <-> text and was always portable.
 src/bjtext.c
+#
+# ...and the entry point that makes them reachable: the broker as a
+# function call, with no transport in it at all.
+src/sukkal_wasm.c

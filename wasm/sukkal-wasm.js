@@ -44,6 +44,12 @@ export function ready() {
 
 export const isReady = () => Module !== null;
 
+/** The instantiated module, for the pieces that call exports directly. */
+export function module() {
+  if (!Module) throw new Error('sukkal: await ready() first');
+  return Module;
+}
+
 function requireModule() {
   if (!Module) throw new Error('sukkal: await ready() first');
   return Module;

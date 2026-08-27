@@ -39,6 +39,53 @@
 
 
 
+/*
+ * A query-string reader for transports that do not have one.
+ *
+ * http11c parses queries itself, which is why the seam takes a function
+ * pointer rather than a string — but a caller with no HTTP in it has only
+ * the raw "a=1&b=2", and somebody has to read it. Percent-decoding
+ * included, because a callback URL arrives that way.
+ *
+ * Pass the raw query (or NULL) as sukkal_req.impl and this as query_get.
+ */
+static int unhex(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+int sukkal_query_from_string(void *impl, const char *key, char *buf, size_t buf_len) {
+    const char *q = impl;
+    if (!q || !*q) return 0;
+    size_t klen = strlen(key);
+
+    for (const char *p = q; *p; ) {
+        const char *amp = strchr(p, '&');
+        const char *end = amp ? amp : p + strlen(p);
+        const char *eq = memchr(p, '=', (size_t)(end - p));
+        if (eq && (size_t)(eq - p) == klen && memcmp(p, key, klen) == 0) {
+            size_t out = 0;
+            for (const char *v = eq + 1; v < end; v++) {
+                int c = (unsigned char)*v;
+                if (c == '+') c = ' ';
+                else if (c == '%' && v + 2 < end) {
+                    int hi = unhex(v[1]), lo = unhex(v[2]);
+                    if (hi >= 0 && lo >= 0) { c = hi * 16 + lo; v += 2; }
+                }
+                if (out + 1 >= buf_len) return -1;   /* value does not fit */
+                buf[out++] = (char)c;
+            }
+            buf[out] = '\0';
+            return 1;
+        }
+        if (!amp) break;
+        p = amp + 1;
+    }
+    return 0;
+}
+
 /* ---- response helpers ------------------------------------------------ */
 
 static void res_bj(sukkal_res *res, int code, const uint8_t *data, size_t len) {
@@ -1123,7 +1170,8 @@ static void h_subjects(sukkal_req *req, sukkal_res *res) {
 
     char *names = NULL;
     size_t names_len = 0;
-    if (bjm_dir_listing(a->dir, &names, &names_len) != BJ_OK) {
+    int owned = 0;
+    if (bjm_store_listing(a->store, &names, &names_len, &owned) != BJ_OK) {
         res_err(res, 500, "listing failed\n");
         return;
     }
@@ -1132,7 +1180,7 @@ static void h_subjects(sukkal_req *req, sukkal_res *res) {
     size_t out_len = 0;
     int e = bjm_subjects(a->store, names, names_len,
                          has == 1 ? pattern : NULL, &out, &out_len);
-    free(names);
+    if (owned) free(names);
     if (e) { res_err(res, status_for(e), "listing failed\n"); return; }
     res_bj(res, 200, out, out_len);
 }
@@ -1144,9 +1192,10 @@ static void h_health(sukkal_req *req, sukkal_res *res) {
     int nsubjects = 0;
     char *names = NULL;
     size_t names_len = 0;
-    if (bjm_dir_listing(a->dir, &names, &names_len) == BJ_OK) {
+    int owned = 0;
+    if (bjm_store_listing(a->store, &names, &names_len, &owned) == BJ_OK) {
         bjm_subject_count(a->store, names, names_len, &nsubjects);
-        free(names);
+        if (owned) free(names);
     }
 
     bj_builder *b = a->bld;

@@ -48,6 +48,13 @@ static int32_t posix_adopt(void *ctx, const char *from, uint32_t from_len,
     return renameat(dirfd, f, dirfd, t) == 0 ? BJ_OK : BJ_ERR_STATE;
 }
 
+/* The listing hook: a readdir, freshly each time, because a directory can
+ * gain a subject between one request and the next. */
+static int posix_listing(void *ctx, char **out, size_t *out_len, int *owned) {
+    *owned = 1;
+    return bjm_dir_listing((const char *)ctx, out, out_len);
+}
+
 bjm_store *bjm_store_open(const char *dir) {
     if (mkdir(dir, 0755) != 0 && errno != EEXIST) return NULL;
 
@@ -66,6 +73,7 @@ bjm_store *bjm_store_open(const char *dir) {
      * says it borrows. A host that opens stores repeatedly wants
      * bjm_store_open_ns and its own lifetimes. */
     bjm_store_set_clock(st, posix_now_ms, NULL);
+    bjm_store_set_listing(st, posix_listing, (void *)dir);
     bjm_store_set_adopt(st, posix_adopt, (void *)(intptr_t)dirfd);
     return st;
 }

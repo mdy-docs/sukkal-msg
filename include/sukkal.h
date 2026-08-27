@@ -70,6 +70,13 @@ typedef void (*sukkal_handler)(sukkal_req *req, sukkal_res *res);
 sukkal_handler sukkal_route(const char *method, const char *path);
 
 /*
+ * A query_get for a transport that has no query parser of its own: pass
+ * the raw "a=1&b=2" as sukkal_req.impl and this as query_get. http11c has
+ * its own and uses it; a direct call has only the string.
+ */
+int sukkal_query_from_string(void *impl, const char *key, char *buf, size_t buf_len);
+
+/*
  * Route and run, answering 404/405 itself when nothing matches. The one
  * entry point a transport needs: http11c calls it from a fallback handler,
  * and a WASM host calls it directly.
@@ -663,6 +670,23 @@ int bjm_subject_info(bjm_store *st, const char *subject,
  * a WASM host enumerates its own scope and passes the result down.
  */
 int bjm_dir_listing(const char *dir, char **out, size_t *out_len);
+
+/*
+ * How the store answers "what files are there". bjns has no list()
+ * because enumeration is asynchronous in OPFS, so this is the host's:
+ * POSIX installs a readdir, and a WASM host hands over a listing it
+ * gathered before the call.
+ *
+ * `*out` is the caller's to free when `owned` comes back non-zero, and
+ * borrowed otherwise — a host holding a listing it prepared should not be
+ * made to copy it.
+ */
+void bjm_store_set_listing(bjm_store *st,
+                           int (*listing)(void *ctx, char **out, size_t *out_len, int *owned),
+                           void *ctx);
+
+/* Ask it. BJ_ERR_STATE when no listing hook was installed. */
+int bjm_store_listing(bjm_store *st, char **out, size_t *out_len, int *owned);
 
 /* How many subjects the listing holds. `names` as bjm_subjects'. */
 int bjm_subject_count(bjm_store *st, const char *names, size_t names_len, int *count);
