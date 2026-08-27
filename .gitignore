@@ -61,3 +61,6 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# WASM build output
+lib/

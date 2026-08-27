@@ -202,12 +202,38 @@ That is the real prize here, and it is larger than "no build step".
 
 ## Phases
 
-### Phase 0 — prove the substrate
+### Phase 0 — prove the substrate ✅
 
 A WASM build of entrylog + bplustree with a memory `bj_io`, appending to one
 subject and reading it back. No sukkal code at all. Exit: the claim that the
 structures already work in WASM is a demonstration rather than a reading of
 the file listing.
+
+**Done.** `build-wasm.sh` produces one combined 177KB module — binjson plus
+binjson-structures, linked from *their* manifests (`wasm/sources.txt`,
+`wasm/exports.txt`) rather than a hand-copied list, so a structure added
+there arrives here without an edit. `wasm/sukkal-wasm.js` binds it, and
+`test/wasm-substrate.test.js` appends three messages to a subject, syncs,
+reads them back byte-identical, closes the log and reopens it on the same
+handle to find `lastIndex` intact and index 3 next.
+
+Three things it settled:
+
+  - **Nothing was copied.** The structures come from binjson-structures'
+    own `bindStructures()`, whose header says a consumer should call it
+    "instead of copying the classes"; the codec is binjson's pure-JS
+    `encode`/`decode`, already a dependency of the Node client; and
+    `MemoryHandle` — a sync-access-handle-shaped file — turns out to live
+    in binjson itself. Even the memory provider was already written.
+  - **The nested binjson submodule stays uninitialised**, as the README
+    asks. This is a combined build against the top-level checkout, which is
+    what `sources.txt` exists to make possible, and it is also the shape
+    sukkal's own sources will join.
+  - **`getBatch` is bounded by bytes, not count** — which explains
+    something that reads as a bug from outside: a subscribe against the
+    native broker answers `X-Sukkal-Count: 1` while more is waiting. It is
+    a byte budget that always yields at least one entry. Pinned in a test
+    so it stops looking like a defect.
 
 ### Phase 1 — `store.c` through `bjns`
 
