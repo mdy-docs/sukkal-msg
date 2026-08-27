@@ -64,3 +64,6 @@ dkms.conf
 
 # WASM build output
 lib/
+
+# macOS
+.DS_Store
