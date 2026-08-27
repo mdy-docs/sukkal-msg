@@ -378,7 +378,70 @@ void bjm_store_on_publish(bjm_store *st,
  */
 typedef struct bjm_pusher bjm_pusher;
 
+/* ---- the delivery seam ------------------------------------------------
+ *
+ * The broker decides WHAT to deliver — which subscription is due, which
+ * messages it gets, what the headers say, when to give up — and none of
+ * that needs a socket. Actually sending it does, so that is the host's.
+ *
+ * Asynchronous by necessity rather than taste: the native transport is
+ * libcurl's multi interface, which starts a transfer and finishes it
+ * later, and a browser's fetch is a promise. So `send` starts a delivery
+ * and returns; the host reports back through bjm_pusher_on_header,
+ * bjm_pusher_on_body and bjm_pusher_delivered, each naming the
+ * subscription it belongs to.
+ *
+ * The reason this seam matters most is the one that removes it: in
+ * process, "deliver this batch" is a call into the host, and there is no
+ * HTTP anywhere in it (docs/wasm-plan.md).
+ */
+typedef struct {
+    void *ctx;
+
+    /* Per-subscription transport state — a persistent connection, say.
+     * Opened when a subscription is registered, closed when it goes.
+     * Optional: a transport with nothing to keep returns NULL. */
+    void *(*open)(void *ctx);
+    void  (*close)(void *ctx, void *conn);
+
+    /*
+     * Start one delivery. `headers` is a NUL-separated list of "Name:
+     * value" lines, `nheaders` how many. Returns 0 when the transfer was
+     * started; anything else is reported to the caller as a failure to
+     * reach the subscriber, which is the same thing from the broker's
+     * point of view.
+     */
+    int (*send)(void *ctx, void *conn, void *sub, const char *url,
+                const char *headers, int nheaders,
+                const uint8_t *body, size_t body_len);
+} sukkal_transport;
+
 bjm_pusher *bjm_pusher_new(bjm_store *st, const char *dir, uint64_t default_batch_bytes);
+
+/* Install the transport. Until one is set nothing is ever delivered, and
+ * `pump` simply finds work it cannot start. */
+void bjm_pusher_set_transport(bjm_pusher *p, const sukkal_transport *t);
+
+/* Fed back by the transport as a response arrives. `sub` is what `send`
+ * was given. A header line need not be NUL-terminated and may include its
+ * trailing CRLF; only X-Sukkal-* lines are looked at. */
+void bjm_pusher_on_header(bjm_pusher *p, void *sub, const char *line, size_t len);
+void bjm_pusher_on_body(bjm_pusher *p, void *sub, const char *data, size_t len);
+
+/*
+ * One delivery is over. `reached` is 0 when the subscriber was never
+ * spoken to at all — a connection refused, a DNS failure, a timeout —
+ * which is retried, where an HTTP status is an answer and is not.
+ * `error` describes a !reached failure, for the record `GET /push` keeps.
+ */
+void bjm_pusher_delivered(bjm_pusher *p, void *sub, int reached,
+                          long status, const char *error, uint64_t now_ms);
+
+/* The libcurl transport (src/push_posix.c). Native builds only. */
+typedef struct curl_transport curl_transport;
+curl_transport *bjm_push_curl_new(bjm_pusher *p);
+void bjm_push_curl_free(curl_transport *t);
+void bjm_push_curl_service(curl_transport *t, uint64_t now);
 
 /*
  * What every handler is handed as `req->ctx`. Shared between the routing

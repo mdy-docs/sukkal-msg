@@ -324,10 +324,42 @@ Three smaller things followed:
     client suites passed with the bug in — so it was found by asking what
     http11c had been doing for us rather than by running anything.
 
-### Phase 3 — the push seam
+### Phase 3 — the push seam ✅
 
 Delivery through a host-installed callback. Exit: `push.c` no longer includes
 `curl.h`; the native shell installs a libcurl delivery function.
+
+**Done.** `push.c` compiles under `emcc` to a 13KB object. Its 34 libcurl
+call sites are gone; `src/push_posix.c` holds the multi handle.
+
+The seam had to be **asynchronous**, which the plan glossed as "one function
+pointer". libcurl's multi interface starts a transfer and finishes it later,
+and a browser's `fetch` is a promise — so `send` starts a delivery and
+returns, and the transport reports back through `bjm_pusher_on_header`,
+`bjm_pusher_on_body` and `bjm_pusher_delivered`, each naming the
+subscription it belongs to. The incremental header and body parsers stayed
+exactly where they were; only who calls them changed.
+
+Three things worth recording:
+
+  - **The easy-handle options were never broker policy.** HTTP/1.1, no
+    redirects, a connect timeout, and suppressing `Expect: 100-continue`
+    all read like configuration and are facts about talking to an HTTP
+    server. They live with the transport now, where a delivery that is a
+    function call has no use for any of them.
+  - **`reached` is the distinction that matters**, and it survives the
+    move: an HTTP status is the subscriber answering and a 404 will not
+    become a 200 on a retry, where a refused connection might. The broker
+    keeps deciding that; the transport only reports which happened.
+  - **Installing the transport is a hard failure.** A pusher with none
+    registers subscriptions and delivers to none of them, silently, which
+    is the worst way for this to break — so `bjm_serve` refuses to start
+    rather than discovering it later.
+
+All four of sukkal's portable sources — `store.c`, `server.c`, `push.c`,
+`bjtext.c` — are now in `wasm/sources.txt`. Verified: 20/20 Node (which is
+mostly delivery: refusals, redeliveries, queue groups, dead-lettering),
+72/72 Python, 3/3 substrate.
 
 ### Phase 4 — move the storage providers down
 

@@ -13,3 +13,10 @@ src/store.c
 # server.c is the routing table and every handler, written against
 # sukkal_req/sukkal_res. Its http11c half is src/server_posix.c.
 src/server.c
+#
+# push.c decides what to deliver and what a failure means; the sending is
+# a host transport (sukkal_transport). Its libcurl one is src/push_posix.c.
+src/push.c
+#
+# bjtext.c is binjson <-> text and was always portable.
+src/bjtext.c

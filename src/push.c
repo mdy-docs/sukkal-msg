@@ -21,12 +21,10 @@
 
 #include "binjson.h"
 
-#include <curl/curl.h>
 
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 
 #define PUSH_DEFAULT_BATCH_BYTES 65536
 #define PUSH_MAX_BATCH_BYTES     (4u * 1024 * 1024)
@@ -53,8 +51,11 @@ typedef struct {
     char         consumer[BJM_CONSUMER_MAX + 1];
     bjm_push_sub cfg;
 
-    CURL              *easy;
-    struct curl_slist *hdrs;
+    struct bjm_pusher *owner;      /* for the transport, when closing    */
+    void *conn;                    /* the transport's, opaque here       */
+    char  hdrbuf[8 * (BJM_CALLBACK_MAX + 128)];
+    size_t hdrlen;
+    int   nhdr;
     int   inflight;
     int   gone;                    /* deleted mid-delivery; reap on finish */
     char  url[BJM_CALLBACK_MAX + 1];
@@ -105,7 +106,7 @@ typedef struct { char name[BJM_SUBJECT_MAX + 1]; } pname;
 struct bjm_pusher {
     bjm_store  *st;
     const char *dir;               /* for listings; see names_load */
-    CURLM      *multi;
+    sukkal_transport xfer;
     psub      **subs;              /* stable: the multi holds psub pointers */
     int         nsubs, cap;
     pname      *names;
@@ -115,12 +116,6 @@ struct bjm_pusher {
     int         inflight;
     uint64_t    default_batch;
 };
-
-uint64_t bjm_now_ms(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
-}
 
 /* ---- the subject list -------------------------------------------------- */
 
@@ -185,16 +180,14 @@ static int matches(const psub *s, const char *name) {
 
 /* ---- curl callbacks ---------------------------------------------------- */
 
-static size_t on_body(char *data, size_t size, size_t nmemb, void *user) {
-    psub *s = user;
-    size_t n = size * nmemb;
+static void on_body(psub *s, const char *data, size_t n) {
     /* Only kept so a failure can quote what the subscriber said. */
     size_t room = sizeof s->resp - 1 - s->resp_len;
     size_t take = n < room ? n : room;
     memcpy(s->resp + s->resp_len, data, take);
     s->resp_len += take;
     s->resp[s->resp_len] = '\0';
-    return n;
+    return;
 }
 
 /* Case-insensitive "starts with", answering where the value begins. */
@@ -209,9 +202,8 @@ static size_t hdr_is(const char *data, size_t n, const char *name) {
     return wn;
 }
 
-static size_t on_hdr(char *data, size_t size, size_t nmemb, void *user) {
-    psub *s = user;
-    size_t n = size * nmemb, at;
+static void on_hdr(psub *s, const char *data, size_t n) {
+    size_t at;
     if ((at = hdr_is(data, n, "x-sukkal-ack:"))) {
         s->ack_hint = strtoull(data + at, NULL, 10);
         s->has_ack_hint = 1;
@@ -230,41 +222,30 @@ static size_t on_hdr(char *data, size_t size, size_t nmemb, void *user) {
             s->done_list[s->ndone++] = v;
         }
     }
-    return n;
+    return;
 }
 
 /* ---- lifecycle --------------------------------------------------------- */
 
 static void psub_free(psub *s) {
     if (!s) return;
-    if (s->hdrs) curl_slist_free_all(s->hdrs);
-    if (s->easy) curl_easy_cleanup(s->easy);
+    if (s->conn && s->owner && s->owner->xfer.close)
+        s->owner->xfer.close(s->owner->xfer.ctx, s->conn);
     free(s->body);
     free(s);
 }
 
-static psub *psub_new(const char *consumer, const bjm_push_sub *cfg) {
+static psub *psub_new(bjm_pusher *p, const char *consumer, const bjm_push_sub *cfg) {
     psub *s = calloc(1, sizeof *s);
     if (!s) return NULL;
     snprintf(s->consumer, sizeof s->consumer, "%s", consumer);
     s->cfg = *cfg;
-    s->easy = curl_easy_init();
-    if (!s->easy) { free(s); return NULL; }
+    s->owner = p;
+    s->conn = p->xfer.open ? p->xfer.open(p->xfer.ctx) : NULL;
 
-    curl_easy_setopt(s->easy, CURLOPT_PRIVATE, s);
-    curl_easy_setopt(s->easy, CURLOPT_WRITEFUNCTION, on_body);
-    curl_easy_setopt(s->easy, CURLOPT_WRITEDATA, s);
-    curl_easy_setopt(s->easy, CURLOPT_HEADERFUNCTION, on_hdr);
-    curl_easy_setopt(s->easy, CURLOPT_HEADERDATA, s);
-    curl_easy_setopt(s->easy, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-    curl_easy_setopt(s->easy, CURLOPT_CONNECTTIMEOUT_MS,
-                     (long)PUSH_CONNECT_TIMEOUT_MS);
-    curl_easy_setopt(s->easy, CURLOPT_TIMEOUT_MS, (long)PUSH_TIMEOUT_MS);
     /* Redirects would let a callback bounce the broker somewhere it never
      * agreed to send to, which is the one thing a URL from a client must
      * not be able to do. */
-    curl_easy_setopt(s->easy, CURLOPT_FOLLOWLOCATION, 0L);
-    curl_easy_setopt(s->easy, CURLOPT_POST, 1L);
     return s;
 }
 
@@ -277,7 +258,7 @@ static int load_one(void *ctx, const char *consumer, const bjm_push_sub *cfg) {
         p->subs = q;
         p->cap = cap;
     }
-    psub *s = psub_new(consumer, cfg);
+    psub *s = psub_new(p, consumer, cfg);
     if (!s) return 1;
     p->subs[p->nsubs++] = s;
     return 0;
@@ -290,9 +271,8 @@ bjm_pusher *bjm_pusher_new(bjm_store *st, const char *dir, uint64_t default_batc
     p->dir = dir;
     p->default_batch = default_batch_bytes ? default_batch_bytes
                                            : PUSH_DEFAULT_BATCH_BYTES;
-    p->multi = curl_multi_init();
     p->bld = bj_builder_new();
-    if (!p->multi || !p->bld) { bjm_pusher_free(p); return NULL; }
+    if (!p->bld) { bjm_pusher_free(p); return NULL; }
 
     if (names_load(p) != BJ_OK) { bjm_pusher_free(p); return NULL; }
     if (bjm_push_each(st, load_one, p) != BJ_OK) { bjm_pusher_free(p); return NULL; }
@@ -305,12 +285,10 @@ void bjm_pusher_free(bjm_pusher *p) {
     if (!p) return;
     for (int i = 0; i < p->nsubs; i++) {
         if (p->subs[i]->inflight)
-            curl_multi_remove_handle(p->multi, p->subs[i]->easy);
         psub_free(p->subs[i]);
     }
     free(p->subs);
     free(p->names);
-    if (p->multi) curl_multi_cleanup(p->multi);
     bj_builder_free(p->bld);
     free(p);
 }
@@ -400,17 +378,28 @@ int bjm_pusher_seed(bjm_pusher *p, const char *consumer, const char *pattern,
 
 /* ---- delivery ---------------------------------------------------------- */
 
-static void hdr_add(struct curl_slist **l, const char *fmt, ...)
+static void hdr_add(psub *s, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
-static void hdr_add(struct curl_slist **l, const char *fmt, ...) {
+/*
+ * Append one "Name: value" line to the subscription's header buffer,
+ * NUL-separated. A flat buffer rather than a list because it crosses a
+ * seam: a native transport turns it into a curl_slist and a JS one into a
+ * Headers object, and neither wants to walk somebody else's allocation.
+ */
+static void hdr_add(psub *s, const char *fmt, ...) {
     char line[BJM_CALLBACK_MAX + 128];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(line, sizeof line, fmt, ap);
+    int n = vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
-    struct curl_slist *n = curl_slist_append(*l, line);
-    if (n) *l = n;
+    if (n < 0) return;
+    size_t len = (size_t)n < sizeof line - 1 ? (size_t)n : sizeof line - 1;
+    if (s->hdrlen + len + 1 > sizeof s->hdrbuf) return;
+    memcpy(s->hdrbuf + s->hdrlen, line, len);
+    s->hdrlen += len;
+    s->hdrbuf[s->hdrlen++] = '\0';
+    s->nhdr++;
 }
 
 /*
@@ -421,28 +410,28 @@ static void hdr_add(struct curl_slist **l, const char *fmt, ...) {
 static int send_batch(bjm_pusher *p, psub *s, int count) {
     snprintf(s->url, sizeof s->url, "%s", s->cfg.callback);
 
-    if (s->hdrs) { curl_slist_free_all(s->hdrs); s->hdrs = NULL; }
-    hdr_add(&s->hdrs, "Content-Type: %s", SUKKAL_MEDIA_TYPE);
-    hdr_add(&s->hdrs, "X-Sukkal-Subject: %s", s->subject);
-    hdr_add(&s->hdrs, "X-Sukkal-Consumer: %s", s->consumer);
-    hdr_add(&s->hdrs, "X-Sukkal-Count: %d", count);
-    hdr_add(&s->hdrs, "X-Sukkal-First-Index: %llu",
+    s->hdrlen = 0; s->nhdr = 0;
+    hdr_add(s, "Content-Type: %s", SUKKAL_MEDIA_TYPE);
+    hdr_add(s, "X-Sukkal-Subject: %s", s->subject);
+    hdr_add(s, "X-Sukkal-Consumer: %s", s->consumer);
+    hdr_add(s, "X-Sukkal-Count: %d", count);
+    hdr_add(s, "X-Sukkal-First-Index: %llu",
             (unsigned long long)s->first);
-    hdr_add(&s->hdrs, "X-Sukkal-Last-Index: %llu",
+    hdr_add(s, "X-Sukkal-Last-Index: %llu",
             (unsigned long long)s->last);
     if (s->cfg.group[0])
-        hdr_add(&s->hdrs, "X-Sukkal-Group: %s", s->cfg.group);
+        hdr_add(s, "X-Sukkal-Group: %s", s->cfg.group);
     else
         /* How much is still waiting after this batch, so a subscriber can
          * tell "keep up" from "catch up" without asking. A queue has no
          * such number to give: what is waiting is whatever no other
          * worker has taken by the time this one asks. */
-        hdr_add(&s->hdrs, "X-Sukkal-Lag: %llu", (unsigned long long)s->lag);
+        hdr_add(s, "X-Sukkal-Lag: %llu", (unsigned long long)s->lag);
     if (s->cfg.token[0])
-        hdr_add(&s->hdrs, "Authorization: Bearer %s", s->cfg.token);
+        hdr_add(s, "Authorization: Bearer %s", s->cfg.token);
     /* libcurl adds Expect: 100-continue to larger POSTs and then waits a
      * second for a response http11c does not send. */
-    hdr_add(&s->hdrs, "Expect:");
+    hdr_add(s, "Expect:");
 
     s->resp_len = 0;
     s->resp[0] = '\0';
@@ -451,13 +440,9 @@ static int send_batch(bjm_pusher *p, psub *s, int count) {
     s->has_done_list = 0;
     s->ndone = 0;
 
-    curl_easy_setopt(s->easy, CURLOPT_URL, s->url);
-    curl_easy_setopt(s->easy, CURLOPT_HTTPHEADER, s->hdrs);
-    curl_easy_setopt(s->easy, CURLOPT_POSTFIELDS, (const char *)s->body);
-    curl_easy_setopt(s->easy, CURLOPT_POSTFIELDSIZE_LARGE,
-                     (curl_off_t)s->body_len);
-
-    if (curl_multi_add_handle(p->multi, s->easy) != CURLM_OK) return -1;
+    if (!p->xfer.send) return -1;
+    if (p->xfer.send(p->xfer.ctx, s->conn, s, s->url,
+                     s->hdrbuf, s->nhdr, s->body, s->body_len) != 0) return -1;
     s->inflight = 1;
     p->inflight++;
     return 0;
@@ -648,14 +633,14 @@ static void backoff(psub *s, uint64_t now) {
  * a `fail` claiming somebody tried and could not. An HTTP error *is* the
  * worker answering, and that is a real attempt.
  */
-static void finish_jobs(bjm_pusher *p, psub *s, CURLcode rc, long status,
-                        uint64_t now) {
-    int answered = (rc == CURLE_OK);
+static void finish_jobs(bjm_pusher *p, psub *s, int reached, long status,
+                        const char *error, uint64_t now) {
+    int answered = reached;
     int ok = answered && status >= 200 && status < 300;
 
     if (!answered) {
         snprintf(s->last_error, sizeof s->last_error, "%s",
-                 curl_easy_strerror(rc));
+                 error ? error : "unreachable");
         if (s->failures == 0)
             fprintf(stderr, "sukkal: work %s -> %s: %s (jobs left to their "
                             "leases; retrying)\n",
@@ -709,10 +694,10 @@ static void finish_jobs(bjm_pusher *p, psub *s, CURLcode rc, long status,
     p->work = 1;
 }
 
-static void finish(bjm_pusher *p, psub *s, CURLcode rc, uint64_t now) {
+static void finish(bjm_pusher *p, psub *s, int reached, long status,
+                   const char *error, uint64_t now) {
     s->inflight = 0;
     p->inflight--;
-    curl_multi_remove_handle(p->multi, s->easy);
 
     if (s->gone) {                 /* deleted while this was in flight */
         for (int i = 0; i < p->nsubs; i++)
@@ -721,16 +706,12 @@ static void finish(bjm_pusher *p, psub *s, CURLcode rc, uint64_t now) {
         return;
     }
 
-    long status = 0;
-    if (rc == CURLE_OK)
-        curl_easy_getinfo(s->easy, CURLINFO_RESPONSE_CODE, &status);
+    if (s->cfg.group[0]) { finish_jobs(p, s, reached, status, error, now); return; }
 
-    if (s->cfg.group[0]) { finish_jobs(p, s, rc, status, now); return; }
-
-    if (rc != CURLE_OK || status < 200 || status >= 300) {
-        if (rc != CURLE_OK)
+    if (!reached || status < 200 || status >= 300) {
+        if (!reached)
             snprintf(s->last_error, sizeof s->last_error, "%s",
-                     curl_easy_strerror(rc));
+                     error ? error : "unreachable");
         else
             snprintf(s->last_error, sizeof s->last_error, "HTTP %ld%s%.*s",
                      status, s->resp_len ? ": " : "",
@@ -815,19 +796,10 @@ int bjm_pusher_pump(bjm_pusher *p, uint64_t now) {
         if (!started && !busy) p->work = 0;
     }
 
-    int running = 0;
-    if (p->inflight) {
-        curl_multi_perform(p->multi, &running);
-
-        CURLMsg *m;
-        int left = 0;
-        while ((m = curl_multi_info_read(p->multi, &left))) {
-            if (m->msg != CURLMSG_DONE) continue;
-            psub *s = NULL;
-            curl_easy_getinfo(m->easy_handle, CURLINFO_PRIVATE, (char **)&s);
-            if (s) finish(p, s, m->data.result, now);
-        }
-    }
+    /* Nothing is serviced here any more: the transport runs its own
+     * transfers and reports each one through bjm_pusher_delivered. What
+     * this returns is only how long the caller may sleep before this wants
+     * looking at again. */
 
     if (p->inflight) return PUSH_TICK_MS;
     if (p->work) return 0;
@@ -875,4 +847,25 @@ int bjm_pusher_list(bjm_pusher *p, const uint8_t **out, size_t *out_len) {
     if (e) return e;
     *out = bj_builder_data(b, out_len);
     return *out ? BJ_OK : BJ_ERR_STATE;
+}
+
+/* ---- what the transport calls back through ----------------------------- */
+
+void bjm_pusher_set_transport(bjm_pusher *p, const sukkal_transport *t) {
+    p->xfer = *t;
+}
+
+void bjm_pusher_on_header(bjm_pusher *p, void *sub, const char *line, size_t len) {
+    (void)p;
+    on_hdr((psub *)sub, line, len);
+}
+
+void bjm_pusher_on_body(bjm_pusher *p, void *sub, const char *data, size_t len) {
+    (void)p;
+    on_body((psub *)sub, data, len);
+}
+
+void bjm_pusher_delivered(bjm_pusher *p, void *sub, int reached,
+                          long status, const char *error, uint64_t now_ms) {
+    finish(p, (psub *)sub, reached, status, error, now_ms);
 }

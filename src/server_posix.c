@@ -116,6 +116,19 @@ int bjm_serve(const char *host, int port, const char *dir,
         bjm_store_free(a.store);
         return 1;
     }
+    /* The pusher decides what to deliver; this is what actually sends it.
+     * Without it the broker registers subscriptions and delivers to none
+     * of them, silently — which is why it is a hard failure here rather
+     * than something discovered later. */
+    curl_transport *xfer = bjm_push_curl_new(a.push);
+    if (!xfer) {
+        fprintf(stderr, "sukkal: cannot start the delivery transport\n");
+        bjm_pusher_free(a.push);
+        bj_builder_free(a.bld);
+        bjm_store_free(a.store);
+        return 1;
+    }
+
     /* Every append wakes whatever is subscribed to that subject — a
      * publish, a requeue, a job being dead-lettered, all of them. */
     bjm_store_on_publish(a.store, on_publish, &a);
@@ -165,7 +178,9 @@ int bjm_serve(const char *host, int port, const char *dir,
      */
     time_t last_sweep = time(NULL);
     while (g_running) {
-        int wait = bjm_pusher_pump(a.push, bjm_now_ms());
+        uint64_t tick = bjm_now_ms();
+        int wait = bjm_pusher_pump(a.push, tick);
+        bjm_push_curl_service(xfer, tick);
         if (http11c_poll(s, wait) < 0) { rc = 1; break; }
 
         time_t now = time(NULL);
@@ -186,6 +201,7 @@ int bjm_serve(const char *host, int port, const char *dir,
 
 done:
     g_srv = NULL;
+    bjm_push_curl_free(xfer);
     /* Before the store: a delivery still in flight would otherwise report
      * its receipt into freed memory. */
     bjm_store_on_publish(a.store, NULL, NULL);
