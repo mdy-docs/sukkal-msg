@@ -17,19 +17,12 @@
 
 #include "binjson.h"
 #include "bjio.h"
-#include "bjio_posix.h"
 #include "bjns.h"
 #include "bplustree.h"
 #include "entrylog.h"
 
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <time.h>
-#include <unistd.h>
 
 #define SUBJECT_SUFFIX ".elog"
 
@@ -71,8 +64,15 @@ typedef struct {
 } subject;
 
 struct bjm_store {
-    int         dirfd;
     bj_ns       ns;
+    /* The host's clock and its atomic replace, both optional. See
+     * bjm_store_set_clock / bjm_store_set_adopt in sukkal.h for why they
+     * are supplied rather than called for. */
+    uint64_t  (*clock_fn)(void *ctx);
+    void       *clock_ctx;
+    int32_t   (*adopt_fn)(void *ctx, const char *from, uint32_t from_len,
+                          const char *to, uint32_t to_len);
+    void       *adopt_ctx;
     subject    *subs;
     size_t      nsubs, cap;
     bj_builder *bld;      /* scratch for bjm_subjects / bjm_consumers */
@@ -181,32 +181,38 @@ static void marks_prune(bjm_store *st, const char *subject, uint64_t base);
 
 /* Wall-clock milliseconds; defined with the queue machinery that needs it
  * most, but the dedup window is measured in it too. */
-static uint64_t now_ms(void);
+static uint64_t now_ms(bjm_store *st);
 
 /* ---- open / close ---------------------------------------------------- */
 
-bjm_store *bjm_store_open(const char *dir) {
-    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return NULL;
-
-    int dirfd = open(dir, O_RDONLY);
-    if (dirfd < 0) return NULL;
-
+bjm_store *bjm_store_open_ns(bj_ns ns) {
     bjm_store *st = calloc(1, sizeof *st);
-    if (!st) { close(dirfd); return NULL; }
-    st->dirfd = dirfd;
+    if (!st) return NULL;
+    st->ns = ns;
 
-    if (bjns_posix_open(dirfd, &st->ns) != BJ_OK) {
-        free(st); close(dirfd); return NULL;
-    }
     st->bld = bj_builder_new();
     st->cbld = bj_builder_new();
     st->dbld = bj_builder_new();
     if (!st->bld || !st->cbld || !st->dbld) {
         bj_builder_free(st->bld); bj_builder_free(st->cbld);
         bj_builder_free(st->dbld);
-        bjns_posix_free(&st->ns); free(st); close(dirfd); return NULL;
+        free(st);
+        return NULL;
     }
     return st;
+}
+
+void bjm_store_set_clock(bjm_store *st, uint64_t (*now_ms)(void *ctx), void *ctx) {
+    st->clock_fn = now_ms;
+    st->clock_ctx = ctx;
+}
+
+void bjm_store_set_adopt(bjm_store *st,
+                         int32_t (*adopt)(void *ctx, const char *from, uint32_t from_len,
+                                          const char *to, uint32_t to_len),
+                         void *ctx) {
+    st->adopt_fn = adopt;
+    st->adopt_ctx = ctx;
 }
 
 void bjm_store_free(bjm_store *st) {
@@ -245,8 +251,6 @@ void bjm_store_free(bjm_store *st) {
     bj_builder_free(st->bld);
     bj_builder_free(st->cbld);
     bj_builder_free(st->dbld);
-    bjns_posix_free(&st->ns);
-    close(st->dirfd);
     free(st);
 }
 
@@ -1087,7 +1091,9 @@ static void mark_publish(bjm_store *st, subject *s, uint64_t index) {
     }
     if (!s->pol.max_age_s) return;           /* no age policy, no marks */
 
-    uint64_t now = (uint64_t)time(NULL);
+    /* Seconds, because a retention policy is expressed in them; the host
+     * clock is the same one the leases and the dedup window read. */
+    uint64_t now = now_ms(st) / 1000;
     uint64_t interval = s->pol.max_age_s / BJM_MARKS_PER_WINDOW;
     if (interval < 1) interval = 1;
     if (s->last_mark_t && now - s->last_mark_t < interval) return;
@@ -1223,7 +1229,7 @@ static int dedup_open(bjm_store *st) {
         }
     }
     if (st->dd_rotated_ms == 0) {
-        st->dd_rotated_ms = now_ms();
+        st->dd_rotated_ms = now_ms(st);
         st->dd_open = 1;
         dd_state_save(st);
         return BJ_OK;
@@ -1238,7 +1244,7 @@ static int dedup_open(bjm_store *st) {
  * nothing per entry and leaves no deletions to compact away.
  */
 static void dedup_rotate(bjm_store *st) {
-    uint64_t now = now_ms();
+    uint64_t now = now_ms(st);
     uint64_t window = bjm_dedup_window(st);
     uint64_t elapsed = now - st->dd_rotated_ms;
     if (elapsed < window) return;
@@ -1387,10 +1393,15 @@ static int dead_subject_of(const char *subject, char *out, size_t cap) {
     return 1;
 }
 
-static uint64_t now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+/*
+ * The host's clock, or zero when it did not install one. Zero is chosen
+ * deliberately over some fallback: with no clock, leases never expire and
+ * dedup windows never close, which leaves work held and duplicates
+ * collapsed — both of which are recoverable. A guessed clock would expire
+ * leases at the wrong moment, which is not.
+ */
+static uint64_t now_ms(bjm_store *st) {
+    return st->clock_fn ? st->clock_fn(st->clock_ctx) : 0;
 }
 
 static int queues_open(bjm_store *st) {
@@ -1581,7 +1592,7 @@ int bjm_take(bjm_store *st, const char *subject_name, const char *group,
     if (max < 1) max = 1;
     if (max > BJM_INFLIGHT_MAX) max = BJM_INFLIGHT_MAX;
 
-    uint64_t now = now_ms();
+    uint64_t now = now_ms(st);
     uint64_t chosen[BJM_INFLIGHT_MAX];
     uint64_t attempts[BJM_INFLIGHT_MAX];
     int n = 0;
@@ -1854,7 +1865,7 @@ static int queue_release(bjm_store *st, const char *subject, const char *group,
         uint64_t d = delay_ms == UINT64_MAX
             ? backoff_for(q, FL_ATTEMPTS(q, at))
             : delay_ms;
-        FL_EXPIRES(q, at) = now_ms() + d;
+        FL_EXPIRES(q, at) = now_ms(st) + d;
         if (retry_in_ms) *retry_in_ms = d;
     }
 
@@ -1936,7 +1947,7 @@ int bjm_queues(bjm_store *st, const char *subject,
     if (e) return e;
 
     uint64_t last = bjm_last_index(st, subject);
-    uint64_t now = now_ms();
+    uint64_t now = now_ms(st);
 
     char lo[BJM_SUBJECT_MAX + 2], hi[BJM_SUBJECT_MAX + 2];
     bpt_key min, max;
@@ -2104,22 +2115,39 @@ int bjm_subject_info(bjm_store *st, const char *subject_name,
     return BJ_OK;
 }
 
-int bjm_subject_count(bjm_store *st, int *count) {
-    *count = 0;
-    DIR *d = fdopendir(dup(st->dirfd));
-    if (!d) return BJ_ERR_STATE;
-    /* dup shares the file offset with st->dirfd, so a previous listing
-     * leaves the directory at EOF and this reads nothing. */
-    rewinddir(d);
+/*
+ * Walk a NUL-separated listing, handing each "<subject>.elog" name to `fn`
+ * with the suffix already stripped. The one place this file knows what a
+ * directory listing looks like.
+ *
+ * Names that do not end in the suffix are skipped rather than rejected, so
+ * a host may pass a raw listing — the cursor file, the policy tree and the
+ * queue state all live in the same scope and none of them is a subject.
+ */
+static void for_each_subject(const char *names, size_t names_len,
+                             void (*fn)(void *ctx, const char *name, size_t len),
+                             void *ctx) {
     const size_t suffix_len = sizeof SUBJECT_SUFFIX - 1;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        size_t n = strlen(ent->d_name);
-        if (n > suffix_len &&
-            strcmp(ent->d_name + n - suffix_len, SUBJECT_SUFFIX) == 0)
-            (*count)++;
+    size_t i = 0;
+    while (i < names_len) {
+        const char *entry = names + i;
+        size_t n = strnlen(entry, names_len - i);
+        i += n + 1;
+        if (n <= suffix_len) continue;
+        if (memcmp(entry + n - suffix_len, SUBJECT_SUFFIX, suffix_len) != 0) continue;
+        fn(ctx, entry, n - suffix_len);
     }
-    closedir(d);
+}
+
+static void count_one(void *ctx, const char *name, size_t len) {
+    (void)name; (void)len;
+    (*(int *)ctx)++;
+}
+
+int bjm_subject_count(bjm_store *st, const char *names, size_t names_len, int *count) {
+    (void)st;
+    *count = 0;
+    for_each_subject(names, names_len, count_one, count);
     return BJ_OK;
 }
 
@@ -2127,15 +2155,25 @@ int bjm_subject_count(bjm_store *st, int *count) {
 
 /*
  * elog_compact writes the surviving entries into a second file, which the
- * host then adopts in place of the original. "Adopt" here is renameat
- * over the live name: the replacement is complete and fsynced before the
- * rename, and the rename itself is atomic, so a crash at any point leaves
- * either the whole old log or the whole new one — never a half-trimmed
- * file. bjns has no rename, but the store owns its directory fd, so this
- * is the store's business to do directly.
+ * host then adopts in place of the original. "Adopt" is an atomic replace
+ * — renameat on POSIX: the replacement is complete and fsynced before it
+ * happens, and it happens all at once, so a crash at any point leaves
+ * either the whole old log or the whole new one, never a half-trimmed
+ * file.
+ *
+ * bjns has no rename and says so on purpose, so this is the host's to
+ * supply (bjm_store_set_adopt). A store without one refuses to trim rather
+ * than improvising: truncating the live file and copying the compacted
+ * bytes in would turn a crash during routine retention into a destroyed
+ * subject, which is a worse outcome than a log that stayed too long.
  */
 int bjm_trim(bjm_store *st, const char *subject_name, uint64_t before,
              int force, uint64_t *out_base, uint64_t *removed) {
+    /* Checked before anything is opened or written: a host with no atomic
+     * replace cannot finish a compaction safely, and finding that out
+     * halfway through would leave a temporary file behind for the sweep. */
+    if (!st->adopt_fn) return BJ_ERR_STATE;
+
     subject *s;
     int e = subject_get(st, subject_name, 0, &s);
     if (e) return e;
@@ -2203,7 +2241,7 @@ int bjm_trim(bjm_store *st, const char *subject_name, uint64_t before,
     s->log = NULL;
     st->ns.close(st->ns.ctx, &s->io);
 
-    if (renameat(st->dirfd, tmp, st->dirfd, live) != 0) {
+    if (st->adopt_fn(st->adopt_ctx, tmp, (uint32_t)ntmp, live, (uint32_t)nlive) != BJ_OK) {
         st->ns.remove(st->ns.ctx, tmp, (uint32_t)ntmp);
         e = BJ_ERR_STATE;
         goto reopen;
@@ -2403,33 +2441,31 @@ int bjm_policy_list(bjm_store *st, const uint8_t **out, size_t *out_len) {
 
 /* ---- discovery ------------------------------------------------------- */
 
-int bjm_subjects(bjm_store *st, const char *pattern,
-                 const uint8_t **out, size_t *out_len) {
-    DIR *d = fdopendir(dup(st->dirfd));
-    if (!d) return BJ_ERR_STATE;
-    rewinddir(d);
+struct subject_filter {
+    bj_builder *b;
+    const char *pattern;
+};
 
+static void put_one(void *ctx, const char *name, size_t len) {
+    struct subject_filter *f = ctx;
+    if (f->pattern) {
+        char subject[BJM_SUBJECT_MAX + 1];
+        if (len > BJM_SUBJECT_MAX) return;
+        memcpy(subject, name, len);
+        subject[len] = '\0';
+        if (!bjm_pattern_match(f->pattern, subject)) return;
+    }
+    bj_put_string(f->b, (const uint8_t *)name, (uint32_t)len);
+}
+
+int bjm_subjects(bjm_store *st, const char *names, size_t names_len,
+                 const char *pattern, const uint8_t **out, size_t *out_len) {
     bj_builder *b = st->bld;
     bj_builder_reset(b);
     bj_begin_array(b);
 
-    const size_t suffix_len = sizeof SUBJECT_SUFFIX - 1;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        size_t n = strlen(ent->d_name);
-        if (n <= suffix_len) continue;
-        if (strcmp(ent->d_name + n - suffix_len, SUBJECT_SUFFIX) != 0) continue;
-        if (pattern) {
-            char name[BJM_SUBJECT_MAX + 1];
-            size_t base = n - suffix_len;
-            if (base > BJM_SUBJECT_MAX) continue;
-            memcpy(name, ent->d_name, base);
-            name[base] = '\0';
-            if (!bjm_pattern_match(pattern, name)) continue;
-        }
-        bj_put_string(b, (const uint8_t *)ent->d_name, (uint32_t)(n - suffix_len));
-    }
-    closedir(d);
+    struct subject_filter filter = { b, pattern };
+    for_each_subject(names, names_len, put_one, &filter);
 
     bj_end_array(b);
     int e = bj_builder_error(b);

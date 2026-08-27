@@ -40,6 +40,8 @@
 
 typedef struct {
     bjm_store      *store;
+    const char     *dir;     /* for listings: bjns has no list(), so the
+                              * host enumerates and passes the names in */
     bj_builder     *bld;     /* scratch for composing small responses */
     http11c_server *srv;     /* for connection count in /health */
     bjm_pusher     *push;    /* the outbound half: delivery to callbacks */
@@ -1128,9 +1130,18 @@ static void h_subjects(http11c_request *req, http11c_response *res) {
         return;
     }
 
+    char *names = NULL;
+    size_t names_len = 0;
+    if (bjm_dir_listing(a->dir, &names, &names_len) != BJ_OK) {
+        res_err(res, 500, "listing failed\n");
+        return;
+    }
+
     const uint8_t *out = NULL;
     size_t out_len = 0;
-    int e = bjm_subjects(a->store, has == 1 ? pattern : NULL, &out, &out_len);
+    int e = bjm_subjects(a->store, names, names_len,
+                         has == 1 ? pattern : NULL, &out, &out_len);
+    free(names);
     if (e) { res_err(res, status_for(e), "listing failed\n"); return; }
     res_bj(res, 200, out, out_len);
 }
@@ -1140,7 +1151,12 @@ static void h_health(http11c_request *req, http11c_response *res) {
     const char *backend = http11c_backend();
 
     int nsubjects = 0;
-    bjm_subject_count(a->store, &nsubjects);
+    char *names = NULL;
+    size_t names_len = 0;
+    if (bjm_dir_listing(a->dir, &names, &names_len) == BJ_OK) {
+        bjm_subject_count(a->store, names, names_len, &nsubjects);
+        free(names);
+    }
 
     bj_builder *b = a->bld;
     bj_builder_reset(b);
@@ -1212,6 +1228,7 @@ static void on_signal(int sig) {
 int bjm_serve(const char *host, int port, const char *dir,
               uint64_t dedup_window_ms) {
     app a = {0};
+    a.dir = dir;
     a.store = bjm_store_open(dir);
     if (!a.store) {
         fprintf(stderr, "sukkal: cannot open store at %s\n", dir);
@@ -1223,7 +1240,7 @@ int bjm_serve(const char *host, int port, const char *dir,
 
     a.started = time(NULL);
 
-    a.push = bjm_pusher_new(a.store, DEFAULT_MAX_BATCH_BYTES);
+    a.push = bjm_pusher_new(a.store, dir, DEFAULT_MAX_BATCH_BYTES);
     if (!a.push) {
         fprintf(stderr, "sukkal: cannot start the delivery engine\n");
         bj_builder_free(a.bld);

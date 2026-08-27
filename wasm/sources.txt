@@ -1,6 +1,11 @@
 # sukkal's own C sources that compile for WASM, one per line, relative to
 # the package root. Consumed by build-wasm.sh.
 #
-# Empty at Phase 0 on purpose. A file joins this list once it no longer
-# reaches POSIX, http11c or libcurl directly — see docs/wasm-plan.md for
-# the three seams and the order they get cut in. store.c is first.
+# A file joins this list once it no longer reaches POSIX, http11c or
+# libcurl directly — see docs/wasm-plan.md for the three seams and the
+# order they get cut in.
+#
+# store.c reaches the world through a bj_ns and two host hooks (a clock
+# and an atomic replace) and nothing else. Its POSIX half lives in
+# src/store_posix.c, which is native-only and not listed here.
+src/store.c

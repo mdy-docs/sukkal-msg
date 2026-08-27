@@ -235,12 +235,53 @@ Three things it settled:
     a byte budget that always yields at least one entry. Pinned in a test
     so it stops looking like a defect.
 
-### Phase 1 — `store.c` through `bjns`
+### Phase 1 — `store.c` through `bjns` ✅
 
 The nine opens, two directory scans and one `mkdir`. Exit: `store.c` compiles
 with no POSIX header included, and the native build still passes its tests —
 which is the point, since a conversion that only the WASM build exercises is
 a conversion nobody trusts.
+
+**Done.** `store.c` now includes `<stdlib.h>` and `<string.h>` and nothing
+else, and compiles under `emcc` to a 37KB object defining **50 `bjm_*`
+functions** — `publish`, `take`, `done`, `fail`, `trim`, `requeue`, the
+policy calls, the cursors. The broker's logic is WASM code today; what it
+lacks is a way to be called (Phase 2) and a host to deliver for it (Phase 3).
+
+The POSIX half moved to `src/store_posix.c`, which the WASM build does not
+compile. `bjm_store_open(dir)` lives there now as a shell over the portable
+`bjm_store_open_ns(bj_ns)`.
+
+Four things this settled, three of which the plan had wrong:
+
+  - **The `renameat` was the hard part, not the opens.** The plan counted
+    nine opens and two scans and called that "the whole of it". The one
+    `renameat` mattered more than all of them: compaction writes a new log
+    beside the live one and swaps, and the swap must be atomic or a crash
+    during routine retention destroys a subject. `bjns` refuses rename on
+    purpose ("Not needed. Resist."), so it is now a host hook —
+    `bjm_store_set_adopt` — that POSIX fills with `renameat` and a host
+    without an atomic replace leaves empty. `bjm_trim` then refuses before
+    opening anything rather than improvising a non-atomic imitation, which
+    would trade "the log stayed too long" for "the subject is gone".
+  - **The clock was missed entirely.** `clock_gettime` in `now_ms`, and a
+    bare `time(NULL)` in the retention marks. Both are now
+    `bjm_store_set_clock`, which also makes lease expiry and backoff
+    testable without waiting for them. With no clock installed the store
+    reports 0, so leases never expire and dedup windows never close —
+    both recoverable, where a guessed clock would expire a lease at the
+    wrong moment.
+  - **`push.c` needed the listing too**, which the plan had not noticed:
+    matching a pattern registration against existing subjects is a
+    directory read. It takes the directory now, and is native-only anyway.
+  - **The listing is passed in, per `bjns`' own instruction**, as a
+    NUL-separated buffer. `bjm_dir_listing(dir)` produces one on POSIX and
+    lives in the shell; a WASM host enumerates its own scope. Both callers
+    are in `server.c`, which now keeps the directory it was given.
+
+Verified: the native binary passes 20/20 Node and 72/72 Python against a
+real broker, and `subjects`, its pattern filter, the `/health` count and
+`trim` — the four routes whose implementation changed — behave as before.
 
 ### Phase 2 — the request seam
 

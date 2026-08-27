@@ -104,6 +104,7 @@ typedef struct { char name[BJM_SUBJECT_MAX + 1]; } pname;
 
 struct bjm_pusher {
     bjm_store  *st;
+    const char *dir;               /* for listings; see names_load */
     CURLM      *multi;
     psub      **subs;              /* stable: the multi holds psub pointers */
     int         nsubs, cap;
@@ -154,10 +155,22 @@ static void nm_string(void *ctx, const uint8_t *v, uint32_t len) {
     names_add(p, name);
 }
 
+/*
+ * Which subjects exist, so a pattern registration can be matched against
+ * them. bjns has no list() — enumeration is asynchronous in OPFS — so the
+ * names are read here and passed down. This file is native-only anyway,
+ * being libcurl from end to end.
+ */
 static int names_load(bjm_pusher *p) {
+    char *names = NULL;
+    size_t names_len = 0;
+    int e = bjm_dir_listing(p->dir, &names, &names_len);
+    if (e) return e;
+
     const uint8_t *out = NULL;
     size_t out_len = 0;
-    int e = bjm_subjects(p->st, NULL, &out, &out_len);
+    e = bjm_subjects(p->st, names, names_len, NULL, &out, &out_len);
+    free(names);
     if (e) return e;
     bj_visitor v = bjm_visitor_noop(p);
     v.on_string = nm_string;
@@ -270,10 +283,11 @@ static int load_one(void *ctx, const char *consumer, const bjm_push_sub *cfg) {
     return 0;
 }
 
-bjm_pusher *bjm_pusher_new(bjm_store *st, uint64_t default_batch_bytes) {
+bjm_pusher *bjm_pusher_new(bjm_store *st, const char *dir, uint64_t default_batch_bytes) {
     bjm_pusher *p = calloc(1, sizeof *p);
     if (!p) return NULL;
     p->st = st;
+    p->dir = dir;
     p->default_batch = default_batch_bytes ? default_batch_bytes
                                            : PUSH_DEFAULT_BATCH_BYTES;
     p->multi = curl_multi_init();

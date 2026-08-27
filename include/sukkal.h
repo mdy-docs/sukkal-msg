@@ -13,6 +13,7 @@
 #include <stdio.h>
 
 #include "binjson.h"
+#include "bjns.h"
 
 /* The media type carried by every request and success-response body. */
 #define SUKKAL_MEDIA_TYPE "application/binjson"
@@ -48,9 +49,57 @@ int bjm_envelope_split(const uint8_t *data, size_t len,
  */
 typedef struct bjm_store bjm_store;
 
-/* Open (creating if needed) the store rooted at `dir`. NULL on failure. */
+/*
+ * Open a store over a namespace the caller supplies. This is the portable
+ * constructor: the store does no naming of its own beyond `<subject>.elog`,
+ * and reaches the world only through `ns` and the hooks below, so it
+ * compiles for WASM where there is no directory to open (docs/wasm-plan.md).
+ *
+ * The store takes `ns` by value and does not own it: the caller closes it
+ * after bjm_store_free.
+ */
+bjm_store *bjm_store_open_ns(bj_ns ns);
+
+/*
+ * Open (creating if needed) the store rooted at `dir`. NULL on failure.
+ * The POSIX shell over bjm_store_open_ns — it makes the directory, opens a
+ * bjns over it, and installs the clock and adopt hooks. Native builds only;
+ * see src/store_posix.c.
+ */
 bjm_store *bjm_store_open(const char *dir);
 void bjm_store_free(bjm_store *st);
+
+/*
+ * Wall-clock milliseconds, for lease expiry, retry backoff and the dedup
+ * window. Supplied rather than read, because WASM has no clock of its own —
+ * and because a broker whose sense of time is injected is a broker whose
+ * retry logic can be tested without waiting for it.
+ *
+ * A store with no clock installed reports 0, which stops leases expiring
+ * and dedup windows closing rather than doing either at the wrong moment.
+ */
+void bjm_store_set_clock(bjm_store *st, uint64_t (*now_ms)(void *ctx), void *ctx);
+
+/*
+ * Replace the file named `to` with the one named `from`, atomically.
+ *
+ * The one thing bjns deliberately does not offer — "rename, stat, mkdir,
+ * paths. Not needed. Resist." — and the one thing compaction genuinely
+ * needs, because the whole point of writing a compacted log beside the live
+ * one is that the swap cannot be observed half-done. So it is a hook rather
+ * than an assumption: POSIX installs renameat, and a host that cannot
+ * rename installs nothing.
+ *
+ * Without it bjm_trim refuses rather than improvising. A non-atomic
+ * imitation (truncate the live file, copy the compacted bytes in) would
+ * turn a crash during retention into a destroyed subject, which is a worse
+ * failure than not compacting. See docs/wasm-plan.md's open questions for
+ * the generation-flip design that would remove the need.
+ */
+void bjm_store_set_adopt(bjm_store *st,
+                         int32_t (*adopt)(void *ctx, const char *from, uint32_t from_len,
+                                          const char *to, uint32_t to_len),
+                         void *ctx);
 
 /*
  * Subject names are file names, so they are restricted to [A-Za-z0-9_.-],
@@ -108,12 +157,20 @@ int bjm_read(bjm_store *st, const char *subject, uint64_t from,
              const uint8_t **out, size_t *out_len, uint64_t *last_index);
 
 /*
- * Encode the store's subjects as a binjson ARRAY of strings, read from the
- * directory so the answer includes subjects this process has never opened.
- * Bytes are owned by the store and valid until the next call.
+ * Encode the store's subjects as a binjson ARRAY of strings, filtered by
+ * `pattern` when one is given. Bytes are owned by the store and valid until
+ * the next call.
+ *
+ * `names` is the directory's listing, passed IN as a NUL-separated buffer
+ * of file names — bjns has no list() and says why: enumeration is
+ * asynchronous in OPFS, and a callback form would need JS function pointers
+ * in a WASM table that is deliberately not growable. So the host enumerates
+ * (whenever and however it can) and hands the result down. Names that are
+ * not "<subject>.elog" are ignored, so a raw directory listing may be
+ * passed as-is.
  */
-int bjm_subjects(bjm_store *st, const char *pattern,
-                 const uint8_t **out, size_t *out_len);
+int bjm_subjects(bjm_store *st, const char *names, size_t names_len,
+                 const char *pattern, const uint8_t **out, size_t *out_len);
 
 /* ---- durable subscriptions (read receipts) ---------------------------- */
 
@@ -258,7 +315,7 @@ void bjm_store_on_publish(bjm_store *st,
  */
 typedef struct bjm_pusher bjm_pusher;
 
-bjm_pusher *bjm_pusher_new(bjm_store *st, uint64_t default_batch_bytes);
+bjm_pusher *bjm_pusher_new(bjm_store *st, const char *dir, uint64_t default_batch_bytes);
 void        bjm_pusher_free(bjm_pusher *p);
 int         bjm_pusher_count(const bjm_pusher *p);
 
@@ -447,7 +504,15 @@ int bjm_requeue(bjm_store *st, const char *subject, uint64_t dlq_index,
 int bjm_subject_info(bjm_store *st, const char *subject,
                      uint64_t *base, uint64_t *last, uint64_t *bytes);
 
-int bjm_subject_count(bjm_store *st, int *count);
+/*
+ * The directory's file names, NUL-separated, ready for bjm_subjects and
+ * bjm_subject_count. Caller frees `*out`. POSIX only (src/store_posix.c) —
+ * a WASM host enumerates its own scope and passes the result down.
+ */
+int bjm_dir_listing(const char *dir, char **out, size_t *out_len);
+
+/* How many subjects the listing holds. `names` as bjm_subjects'. */
+int bjm_subject_count(bjm_store *st, const char *names, size_t names_len, int *count);
 
 /* ---- retention policy -------------------------------------------------- */
 
