@@ -44,7 +44,65 @@ Every file-touching operation splits into a pure call returning the names it
 will need, and a synchronous call that does the work over the handles the
 host opened in between.
 
+And on the JS side, `wasm/structures-core.js` already owns the handle
+registry the C glue reads through — `registerHandle` / `unregisterHandle`
+over `Module.bjioHandles`, with an explicit hook for a consumer that wants
+to supply its own.
+
 So the substrate is not the work. sukkal's own four files are.
+
+## sukkal needs no storage story: nisaba already wrote it
+
+The providers nisaba runs on are not database code. The whole interface is
+four methods, and not one of them knows what a collection is:
+
+```js
+openFile(name, { create })   // → a sync access handle
+deleteFile(name)
+listFiles()                  // optional; enables orphan sweeps
+subProvider(name)            // a nested, isolated scope
+```
+
+That is *word for word* what `bjns.h` calls itself — "one directory-scoped
+file namespace". The JS provider interface and the C `bjns` interface are the
+same abstraction seen from opposite sides of the bridge, arrived at
+independently, which is the strongest evidence available that it is the right
+seam.
+
+Three implementations already exist, all with identical shapes:
+
+| provider | where | what sukkal would get |
+| --- | --- | --- |
+| `MemoryStorageProvider` | `nisaba/wasm/nisaba-wasm.js` | a broker for tests and for `mdy dev`, losing everything on exit |
+| `OPFSStorageProvider` | same | a **durable broker in a browser tab** — real sync handles, real fsync |
+| `NodeFSStorageProvider` | `nisaba/src/db-node.js` | a **durable local broker with no binary at all** |
+
+`NodeFSSyncHandle` duck-types `FileSystemSyncAccessHandle` — `getSize`,
+`read(buf, { at })`, `write(buf, { at })`, `truncate` — so the C side cannot
+tell the three apart, which is the point.
+
+**The async question answers itself.** A provider's `openFile` is `async`,
+and `bjns` requires opening to be synchronous — which looks like a conflict
+and is precisely the arrangement `bjns` was designed around. The host opens
+(asynchronously, in JS, before the call); C executes (synchronously, over the
+handle it was given). *C plans, the host opens, C executes.* The two designs
+already agree, which is why this is reuse rather than a port.
+
+### Where the providers should live
+
+Not copied into sukkal. **Moved down into binjson-structures**, which already
+owns everything on both sides of them: `bjio`, `bjns` and `hostio` in C, and
+`structures-core.js`'s handle registry in JS. The providers are the one piece
+of that layer sitting a storey too high. nisaba re-exports them and nothing
+breaks for anyone using it today; sukkal imports the same objects, so "the
+same OPFS adapter" is the same code rather than a copy that drifts.
+
+One honest note against this: nisaba deliberately keeps *its own* copies of
+the binjson codec and the tree wrappers, and says so in its README. That
+choice is about not linking two binjson checkouts into one binary — a C
+concern that does not apply to a JS class with no native code in it. Worth
+knowing the project has chosen duplication before, for a reason that is not
+this one.
 
 ## Where the line falls
 
@@ -169,13 +227,23 @@ longer includes `http11c.h`.
 Delivery through a host-installed callback. Exit: `push.c` no longer includes
 `curl.h`; the native shell installs a libcurl delivery function.
 
-### Phase 4 — the WASM build and its JS package
+### Phase 4 — move the storage providers down
 
-`sukkal-wasm.js` mirroring nisaba's shape: a storage provider (memory, OPFS,
-node fs), `ready()`, and a `Broker` whose methods are the routes. Exit:
-publish and subscribe in Node with no binary, and in a browser tab.
+`MemoryStorageProvider`, `OPFSStorageProvider` and `NodeFSStorageProvider`
+from nisaba into binjson-structures, beside the `bjns`/`hostio`/registry
+layer they belong to. nisaba re-exports them, so nothing that uses it today
+notices. Exit: one definition of each, imported by both consumers.
 
-### Phase 5 — mdy-bus gains an in-process transport
+Doable before or after Phases 1–3 — it touches no C — and worth doing early,
+because it is the phase that decides sukkal has no storage code of its own.
+
+### Phase 5 — the WASM build and its JS package
+
+`sukkal-wasm.js` mirroring nisaba's shape: `ready()`, a provider, and a
+`Broker` whose methods are the routes. Exit: publish and subscribe in Node
+with no binary, and in a browser tab, against all three providers.
+
+### Phase 6 — mdy-bus gains an in-process transport
 
 `@mdy-docs/mdy-bus` picks the WASM broker when no URL is configured. Exit:
 `mdy dev` publishes and delivers with nothing installed but npm packages, and
@@ -184,11 +252,13 @@ gone from that path.
 
 ## Open questions
 
-- **Durability in a browser is a real choice, not a detail.** OPFS gives
-  genuine synchronous handles and real fsync; an in-memory provider gives a
-  broker that loses every message on reload. That is fine for `mdy dev` and
-  actively wrong for anything else, so the provider has to be explicit at
-  construction rather than defaulted.
+- **Durability is a choice the caller makes, not a property of the target.**
+  It is tempting to read this as "browser means OPFS, Node means memory", and
+  that is not what the providers say: OPFS is durable, `NodeFSStorageProvider`
+  is durable, memory is not, and all three run wherever their platform does.
+  A broker on memory loses every message when the tab or the process goes,
+  which is right for `mdy dev` and wrong for everything else — so it should be
+  named at construction rather than defaulted to by environment.
 - **Leases and backoff need a clock.** `push.c` uses `sys/time.h`; WASM has
   no timers of its own. The host supplies `now()`, which also makes the
   retry logic testable for the first time.
