@@ -403,13 +403,14 @@ Two things the implementation settled:
 `Broker` whose methods are the routes. Exit: publish and subscribe in Node
 with no binary, and in a browser tab, against all three providers.
 
-**Done for Node; the browser is untested.** `new Broker(provider)` publishes,
+**Done.** `new Broker(provider)` publishes,
 subscribes, lists subjects and answers `/health` through the same routing
 table `sukkal serve` uses — one definition, no socket, nothing serialised.
 A broker on `NodeFSStorageProvider` is closed, reopened, and finds its
-messages and its place in the log. The OPFS provider is wired and has no
-reason not to work, but "no reason not to" is not a test, and there is no
-browser in this suite yet.
+messages and its place in the log. The browser is no longer a claim: mdy-docs'
+packages/mdy-live-preview runs this broker in a Chromium tab beside lamassu
+and nisaba — three WASM engines, no server — publishing and delivering,
+driven under Playwright.
 
 The module grew 175KB → 239KB when the entry points were exported, which is
 the broker's own code no longer being dead-stripped.
