@@ -19,9 +19,17 @@
  *   - the codec         binjson's pure-JS encode/decode. nisaba keeps its
  *                       own WASM-bound copy for reasons of its own; there
  *                       is no reason to have a third.
+ *   - the providers     binjson-structures' bindProviders(), so "where do
+ *                       the bytes live" is answered the same way for a
+ *                       broker as for a database. Memory, OPFS and node fs,
+ *                       none of them written here.
  */
 import { bindStructures } from '../third_party/binjson-structures/wasm/structures-core.js';
-import { encode, decode, ObjectId, Pointer, TYPE, MemoryHandle } from '../third_party/binjson/js/binjson.js';
+import { bindProviders, bindNodeProvider } from '../third_party/binjson-structures/wasm/providers.js';
+import {
+  encode, decode, ObjectId, Pointer, TYPE,
+  MemoryHandle, getFileHandle, deleteFile,
+} from '../third_party/binjson/js/binjson.js';
 
 import createModule from '../lib/sukkal.wasm.mjs';
 
@@ -80,4 +88,24 @@ const structures = bindStructures({
 });
 
 export const { EntryLog, ENTRY_TYPE, BPlusTree, orderedKey } = structures;
+
+/*
+ * Named-file storage. Three providers, one interface, and the choice is
+ * the caller's rather than the platform's: OPFS and node fs are both
+ * durable and memory is not, so a broker on memory loses every message
+ * when its tab or its process goes. That is right for a dev loop and wrong
+ * for anything else, which is why nothing here picks one by sniffing the
+ * environment.
+ */
+export const { MemoryStorageProvider, OPFSStorageProvider } =
+  bindProviders({ MemoryHandle, getFileHandle, deleteFile });
+
+/** The node provider, which needs node:fs and so cannot be bound eagerly
+ * in a module a browser also loads. */
+export async function nodeStorageProvider(dir) {
+  const [fs, path] = await Promise.all([import('node:fs'), import('node:path')]);
+  const { NodeFSStorageProvider } = bindNodeProvider({ fs: fs.default, path: path.default });
+  return new NodeFSStorageProvider(dir);
+}
+
 export { encode, decode, ObjectId, Pointer, TYPE, MemoryHandle };

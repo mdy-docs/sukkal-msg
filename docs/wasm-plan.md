@@ -361,15 +361,41 @@ All four of sukkal's portable sources — `store.c`, `server.c`, `push.c`,
 mostly delivery: refusals, redeliveries, queue groups, dead-lettering),
 72/72 Python, 3/3 substrate.
 
-### Phase 4 — move the storage providers down
+### Phase 4 — move the storage providers down ✅
 
 `MemoryStorageProvider`, `OPFSStorageProvider` and `NodeFSStorageProvider`
 from nisaba into binjson-structures, beside the `bjns`/`hostio`/registry
 layer they belong to. nisaba re-exports them, so nothing that uses it today
 notices. Exit: one definition of each, imported by both consumers.
 
-Doable before or after Phases 1–3 — it touches no C — and worth doing early,
-because it is the phase that decides sukkal has no storage code of its own.
+**Done, with one half deliberately left undone.** The providers now live in
+`binjson-structures/wasm/providers.js` and sukkal writes no storage code:
+memory, OPFS and node fs, all three reached through
+`bindProviders()`/`bindNodeProvider()`.
+
+**nisaba was not changed, and should not have been by this phase.** It has
+*zero runtime dependencies* — a deliberate property of that package, not an
+oversight — and importing binjson-structures' JS would give it its first.
+Reversing that is a decision for whoever owns nisaba, on its own merits, not
+a side effect of a broker wanting adapters. So the promised "one definition"
+is not achieved: nisaba keeps its copies, and a future consumer shares the
+ones below it. That is honest duplication rather than an accident, and the
+day nisaba wants to drop its copies the code is already sitting underneath
+it.
+
+Two things the implementation settled:
+
+  - **Parameterised, not imported.** `bindProviders({ MemoryHandle,
+    getFileHandle, deleteFile })`, exactly as `structures-core.js` takes its
+    codec — because sukkal leaves binjson-structures' *nested* binjson
+    submodule uninitialised on purpose, so a relative import would not
+    resolve for it at all. The node provider binds separately, since it is
+    the only one needing `node:fs`, which would make the module unloadable
+    in a browser.
+  - **Durability is the caller's choice, and the tests say so.** A subject
+    written through `NodeFSStorageProvider` is a real file on disk that a
+    second provider, which never saw the first, reads back. Memory is the
+    one that forgets. Nothing sniffs the environment to choose.
 
 ### Phase 5 — the WASM build and its JS package
 

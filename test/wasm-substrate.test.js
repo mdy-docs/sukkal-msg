@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ready, EntryLog, MemoryHandle, encode, decode } from '../wasm/sukkal-wasm.js';
+import {
+  ready, EntryLog, MemoryHandle, encode, decode,
+  MemoryStorageProvider, nodeStorageProvider,
+} from '../wasm/sukkal-wasm.js';
 
 /*
  * Phase 0 of docs/wasm-plan.md: prove the substrate before porting anything
@@ -91,4 +94,80 @@ test('the log survives being closed and reopened on the same handle', async () =
   // ...and it goes on from there rather than starting over.
   assert.equal(reopened.append(0, encode({ order: 'c-1003' })), 3);
   reopened.close();
+});
+
+/*
+ * Phase 4: storage providers, shared rather than written.
+ *
+ * A provider answers "where do the bytes live" in four methods that know
+ * nothing about what is stored — which is why bjns and a JS provider turn
+ * out to be the same abstraction from two sides, and why these live in
+ * binjson-structures beside bjns and hostio rather than inside a database
+ * or a broker.
+ */
+
+test('a subject stored through a provider, not a bare handle', async () => {
+  await ready();
+
+  const store = new MemoryStorageProvider();
+  const log = new EntryLog(await store.openFile('orders.elog', { create: true }));
+  await log.open({ create: true });
+  log.append(0, encode({ id: 'a-1001' }));
+  log.sync();
+
+  assert.deepEqual(await store.listFiles(), ['orders.elog']);
+
+  // Reopening by NAME is the thing a provider adds over a handle: the
+  // broker knows subjects by name and has to find them again.
+  log.close();
+  const reopened = new EntryLog(await store.openFile('orders.elog'));
+  await reopened.open();
+  assert.equal(decode(reopened.getBatch(1)[0].payload).id, 'a-1001');
+  reopened.close();
+});
+
+test('subjects are isolated by subProvider, as separate scopes', async () => {
+  await ready();
+  const root = new MemoryStorageProvider();
+  const a = await root.subProvider('tenant-a');
+  const b = await root.subProvider('tenant-b');
+
+  await a.openFile('orders.elog', { create: true });
+  assert.deepEqual(await a.listFiles(), ['orders.elog']);
+  assert.deepEqual(await b.listFiles(), [], 'one scope cannot see another');
+  // Cached: the same name is the same scope, not a new one each time.
+  assert.equal(await root.subProvider('tenant-a'), a);
+});
+
+test('the node provider is durable — a subject survives the process', async () => {
+  // The distinction that matters and is easy to state backwards: it is not
+  // "browser means OPFS, node means memory". Two of the three providers
+  // are durable, all three run wherever their platform does, and which one
+  // is used is the caller's choice.
+  await ready();
+  const { mkdtemp, rm, readdir } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const dir = await mkdtemp(join(tmpdir(), 'sukkal-provider-'));
+  try {
+    const store = await nodeStorageProvider(dir);
+    const log = new EntryLog(await store.openFile('greet.elog', { create: true }));
+    await log.open({ create: true });
+    log.append(0, encode({ hello: 'world' }));
+    log.sync();
+    log.close();
+
+    // On disk, under the name the broker would use.
+    assert.deepEqual(await readdir(dir), ['greet.elog']);
+
+    // ...and readable by a provider that never saw the first one.
+    const fresh = await nodeStorageProvider(dir);
+    const reread = new EntryLog(await fresh.openFile('greet.elog'));
+    await reread.open();
+    assert.deepEqual(decode(reread.getBatch(1)[0].payload), { hello: 'world' });
+    reread.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
