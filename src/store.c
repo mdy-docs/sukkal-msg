@@ -207,6 +207,10 @@ void bjm_store_set_clock(bjm_store *st, uint64_t (*now_ms)(void *ctx), void *ctx
     st->clock_ctx = ctx;
 }
 
+uint64_t bjm_store_now_ms(bjm_store *st) {
+    return now_ms(st);
+}
+
 void bjm_store_set_adopt(bjm_store *st,
                          int32_t (*adopt)(void *ctx, const char *from, uint32_t from_len,
                                           const char *to, uint32_t to_len),

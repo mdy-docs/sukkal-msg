@@ -9,3 +9,7 @@
 # and an atomic replace) and nothing else. Its POSIX half lives in
 # src/store_posix.c, which is native-only and not listed here.
 src/store.c
+#
+# server.c is the routing table and every handler, written against
+# sukkal_req/sukkal_res. Its http11c half is src/server_posix.c.
+src/server.c

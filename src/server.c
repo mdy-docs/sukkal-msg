@@ -1,5 +1,12 @@
 /*
- * server.c — the broker: http11c routes over the subject store.
+ * server.c — the broker: the routing table and every handler behind it.
+ *
+ * Written against sukkal_req/sukkal_res (see sukkal.h) and nothing else,
+ * so it compiles wherever the store does. The table IS the protocol, and
+ * it used to belong to http11c's router — which meant the transport
+ * decided what this broker answered to. src/server_posix.c is the half
+ * that owns a socket now; a WASM host calls sukkal_dispatch directly, with
+ * no socket in the picture at all (docs/wasm-plan.md).
  *
  * Protocol (every success body is binjson; errors are text/plain so a
  * bare curl is readable):
@@ -26,41 +33,27 @@
 #include "sukkal.h"
 
 #include "binjson.h"
-#include "http11c.h"
 
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
-#define DEFAULT_MAX_BATCH_BYTES 65536
-#define MAX_BODY_BYTES (4u * 1024 * 1024)
-#define IDLE_TIMEOUT_SECS 120
-#define RETENTION_SWEEP_SECS 10
 
-typedef struct {
-    bjm_store      *store;
-    const char     *dir;     /* for listings: bjns has no list(), so the
-                              * host enumerates and passes the names in */
-    bj_builder     *bld;     /* scratch for composing small responses */
-    http11c_server *srv;     /* for connection count in /health */
-    bjm_pusher     *push;    /* the outbound half: delivery to callbacks */
-    time_t          started;
-} app;
-
-static http11c_server *g_srv;   /* for the signal handler only */
 
 /* ---- response helpers ------------------------------------------------ */
 
-static void res_bj(http11c_response *res, int code, const uint8_t *data, size_t len) {
-    http11c_res_status(res, code);
-    http11c_res_header(res, "Content-Type", SUKKAL_MEDIA_TYPE);
-    http11c_res_write(res, data, len);
+static void res_bj(sukkal_res *res, int code, const uint8_t *data, size_t len) {
+    res->status(res->impl, code);
+    res->header(res->impl, "Content-Type", SUKKAL_MEDIA_TYPE);
+    res->write(res->impl, data, len);
 }
 
-static void res_err(http11c_response *res, int code, const char *msg) {
-    http11c_res_header(res, "Content-Type", "text/plain; charset=utf-8");
-    http11c_res_text(res, code, msg);
+/* Errors are text/plain on purpose, so a bare curl against a broken
+ * request is readable. That is the whole of this protocol's error
+ * convention. */
+static void res_err(sukkal_res *res, int code, const char *msg) {
+    res->status(res->impl, code);
+    res->header(res->impl, "Content-Type", "text/plain; charset=utf-8");
+    res->write(res->impl, (const uint8_t *)msg, strlen(msg));
 }
 
 /* Map a BJ_ERR_* code onto the status that describes it to a client. */
@@ -77,9 +70,9 @@ static int status_for(int err) {
  * The subject named by a /pub/ or /sub/ path. Returns NULL and answers the
  * request itself when the path carries no valid subject.
  */
-static const char *subject_of(http11c_request *req, http11c_response *res,
+static const char *subject_of(sukkal_req *req, sukkal_res *res,
                               const char *prefix) {
-    const char *subject = http11c_req_path(req) + strlen(prefix);
+    const char *subject = req->path + strlen(prefix);
     if (!bjm_subject_valid(subject)) {
         res_err(res, 400, "invalid subject: expected 1-128 chars of "
                           "[A-Za-z0-9_.-], no leading/trailing dot\n");
@@ -88,9 +81,9 @@ static const char *subject_of(http11c_request *req, http11c_response *res,
     return subject;
 }
 
-static uint64_t query_u64(http11c_request *req, const char *key, uint64_t dflt) {
+static uint64_t query_u64(sukkal_req *req, const char *key, uint64_t dflt) {
     char buf[32];
-    if (http11c_req_query_get(req, key, buf, sizeof buf) != 1) return dflt;
+    if (req->query_get(req->impl, key, buf, sizeof buf) != 1) return dflt;
     char *end;
     unsigned long long v = strtoull(buf, &end, 10);
     return (end == buf || *end) ? dflt : (uint64_t)v;
@@ -101,9 +94,9 @@ static uint64_t query_u64(http11c_request *req, const char *key, uint64_t dflt) 
  * 0 when absent, -1 when present but malformed (having answered the
  * request itself).
  */
-static int query_consumer(http11c_request *req, http11c_response *res,
+static int query_consumer(sukkal_req *req, sukkal_res *res,
                           char *out, size_t out_size) {
-    int rc = http11c_req_query_get(req, "consumer", out, out_size);
+    int rc = req->query_get(req->impl, "consumer", out, out_size);
     if (rc == 0) return 0;
     if (rc != 1 || !bjm_consumer_valid(out)) {
         res_err(res, 400, "invalid consumer: expected 1-128 chars of "
@@ -114,9 +107,9 @@ static int query_consumer(http11c_request *req, http11c_response *res,
 }
 
 /* As query_consumer, for the `group` parameter. */
-static int query_group(http11c_request *req, http11c_response *res,
+static int query_group(sukkal_req *req, sukkal_res *res,
                        char *out, size_t out_size) {
-    int rc = http11c_req_query_get(req, "group", out, out_size);
+    int rc = req->query_get(req->impl, "group", out, out_size);
     if (rc == 0) return 0;
     if (rc != 1 || !bjm_group_valid(out)) {
         res_err(res, 400, "invalid group: expected 1-128 chars of "
@@ -128,21 +121,19 @@ static int query_group(http11c_request *req, http11c_response *res,
 
 /* ---- handlers -------------------------------------------------------- */
 
-static void h_publish(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_publish(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/pub/");
     if (!subject) return;
 
-    char type[64];
-    if (http11c_req_content_type(req, type, sizeof type) != 1 ||
-        strcmp(type, SUKKAL_MEDIA_TYPE) != 0) {
+    if (!req->content_type || strcmp(req->content_type, SUKKAL_MEDIA_TYPE) != 0) {
         res_err(res, 415, "expected Content-Type: " SUKKAL_MEDIA_TYPE "\n");
         return;
     }
 
-    size_t len = 0;
-    const uint8_t *body = (const uint8_t *)http11c_req_body(req, &len);
+    size_t len = req->body_len;
+    const uint8_t *body = req->body;
     if (!body || len == 0) {
         res_err(res, 400, "empty body\n");
         return;
@@ -182,7 +173,7 @@ static void h_publish(http11c_request *req, http11c_response *res) {
      * of a request that already landed cannot add a second copy.
      */
     char id[BJM_DEDUP_ID_MAX + 1];
-    int has_id = http11c_req_query_get(req, "id", id, sizeof id);
+    int has_id = req->query_get(req->impl, "id", id, sizeof id);
     if (has_id == 1 && !bjm_dedup_id_valid(id)) {
         res_err(res, 400, "invalid id: 1-128 printable bytes, no '/'\n");
         return;
@@ -226,9 +217,9 @@ static void h_publish(http11c_request *req, http11c_response *res) {
     uint64_t ack_index = query_u64(req, "ack_index", 0);
     int acked = 0;
     if (ack_index > 0 &&
-        http11c_req_query_get(req, "ack_subject", ack_subject,
+        req->query_get(req->impl, "ack_subject", ack_subject,
                               sizeof ack_subject) == 1 &&
-        http11c_req_query_get(req, "ack_consumer", ack_consumer,
+        req->query_get(req->impl, "ack_consumer", ack_consumer,
                               sizeof ack_consumer) == 1) {
         if (!bjm_subject_valid(ack_subject) || !bjm_consumer_valid(ack_consumer)) {
             res_err(res, 400, "invalid ack_subject or ack_consumer\n");
@@ -267,15 +258,15 @@ static void h_publish(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_subscribe(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_subscribe(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/sub/");
     if (!subject) return;
 
     uint64_t from = query_u64(req, "from", 0);
-    uint64_t max  = query_u64(req, "max", DEFAULT_MAX_BATCH_BYTES);
-    if (max == 0 || max > MAX_BODY_BYTES) max = DEFAULT_MAX_BATCH_BYTES;
+    uint64_t max  = query_u64(req, "max", SUKKAL_DEFAULT_BATCH);
+    if (max == 0 || max > SUKKAL_MAX_BODY_BYTES) max = SUKKAL_DEFAULT_BATCH;
     if (from == 0) from = 1;
 
     uint64_t base = 0, ignored_last = 0, ignored_bytes = 0;
@@ -310,7 +301,7 @@ static void h_subscribe(http11c_request *req, http11c_response *res) {
             /* First sight of this consumer. ?start=last joins at the end
              * of the log, skipping the backlog; the default replays it. */
             char start[8];
-            if (http11c_req_query_get(req, "start", start, sizeof start) == 1 &&
+            if (req->query_get(req->impl, "start", start, sizeof start) == 1 &&
                 strcmp(start, "last") == 0)
                 acked = bjm_last_index(a->store, subject);
             e = bjm_cursor_set(a->store, subject, consumer, acked);
@@ -359,23 +350,23 @@ static void h_subscribe(http11c_request *req, http11c_response *res) {
      * decoding the body. */
     char buf[32];
     snprintf(buf, sizeof buf, "%d", count);
-    http11c_res_header(res, "X-Sukkal-Count", buf);
+    res->header(res->impl, "X-Sukkal-Count", buf);
     snprintf(buf, sizeof buf, "%llu", (unsigned long long)last);
-    http11c_res_header(res, "X-Sukkal-Last-Index", buf);
+    res->header(res->impl, "X-Sukkal-Last-Index", buf);
     if (skipped) {
         snprintf(buf, sizeof buf, "%llu", (unsigned long long)skipped);
-        http11c_res_header(res, "X-Sukkal-Skipped", buf);
+        res->header(res->impl, "X-Sukkal-Skipped", buf);
     }
     if (has_consumer) {
         snprintf(buf, sizeof buf, "%llu", (unsigned long long)acked);
-        http11c_res_header(res, "X-Sukkal-Acked", buf);
+        res->header(res->impl, "X-Sukkal-Acked", buf);
     }
 
     res_bj(res, 200, out, out_len);
 }
 
-static void h_ack(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_ack(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/ack/");
     if (!subject) return;
@@ -428,9 +419,9 @@ static void h_ack(http11c_request *req, http11c_response *res) {
 /* ---- push subscriptions ------------------------------------------------ */
 
 /* As subject_of, for a path that names a subject *or* a wildcard pattern. */
-static const char *pattern_of(http11c_request *req, http11c_response *res,
+static const char *pattern_of(sukkal_req *req, sukkal_res *res,
                               const char *prefix) {
-    const char *p = http11c_req_path(req) + strlen(prefix);
+    const char *p = req->path + strlen(prefix);
     int ok = bjm_pattern_is(p) ? bjm_pattern_valid(p) : bjm_subject_valid(p);
     if (!ok) {
         res_err(res, 400, "invalid subject or pattern: '.'-separated tokens "
@@ -441,8 +432,8 @@ static const char *pattern_of(http11c_request *req, http11c_response *res,
     return p;
 }
 
-static void h_push_list(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_push_list(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
     const uint8_t *out = NULL;
     size_t out_len = 0;
     int e = bjm_pusher_list(a->push, &out, &out_len);
@@ -450,8 +441,8 @@ static void h_push_list(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_push_put(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_push_put(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *pattern = pattern_of(req, res, "/push/");
     if (!pattern) return;
@@ -470,7 +461,7 @@ static void h_push_put(http11c_request *req, http11c_response *res) {
     memset(&cfg, 0, sizeof cfg);
     snprintf(cfg.pattern, sizeof cfg.pattern, "%s", pattern);
 
-    if (http11c_req_query_get(req, "callback", cfg.callback,
+    if (req->query_get(req->impl, "callback", cfg.callback,
                               sizeof cfg.callback) != 1 ||
         !bjm_callback_valid(cfg.callback)) {
         res_err(res, 400, "?callback=<url> is required: an http:// or "
@@ -484,7 +475,7 @@ static void h_push_put(http11c_request *req, http11c_response *res) {
      * proving the broker, not the other way round — see README on the
      * asymmetry.
      */
-    if (http11c_req_query_get(req, "token", cfg.token, sizeof cfg.token) == 1 &&
+    if (req->query_get(req->impl, "token", cfg.token, sizeof cfg.token) == 1 &&
         !bjm_token_valid(cfg.token)) {
         res_err(res, 400, "invalid token: up to 128 printable, space-free "
                           "bytes\n");
@@ -520,7 +511,7 @@ static void h_push_put(http11c_request *req, http11c_response *res) {
      * member. */
     if (!found && !has_group) {
         char start[8];
-        int at_end = http11c_req_query_get(req, "start", start,
+        int at_end = req->query_get(req->impl, "start", start,
                                            sizeof start) == 1 &&
                      strcmp(start, "last") == 0;
         bjm_pusher_seed(a->push, consumer, cfg.pattern, at_end,
@@ -558,8 +549,8 @@ static void h_push_put(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_push_delete(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_push_delete(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     char consumer[BJM_CONSUMER_MAX + 1];
     int has_consumer = query_consumer(req, res, consumer, sizeof consumer);
@@ -608,8 +599,8 @@ static void h_push_delete(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_consumers(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_consumers(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/consumers/");
     if (!subject) return;
@@ -621,8 +612,8 @@ static void h_consumers(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_unsubscribe(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_unsubscribe(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/consumers/");
     if (!subject) return;
@@ -660,8 +651,8 @@ static void h_unsubscribe(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_info(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_info(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/info/");
     if (!subject) return;
@@ -701,8 +692,8 @@ static void h_info(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_trim(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_trim(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/trim/");
     if (!subject) return;
@@ -745,7 +736,7 @@ static void h_trim(http11c_request *req, http11c_response *res) {
 
 /* Every queue route needs a valid subject and group; answers the request
  * itself and returns 0 when either is missing. */
-static int queue_target(http11c_request *req, http11c_response *res,
+static int queue_target(sukkal_req *req, sukkal_res *res,
                         const char *prefix, const char **subject,
                         char *group, size_t group_size) {
     *subject = subject_of(req, res, prefix);
@@ -759,8 +750,8 @@ static int queue_target(http11c_request *req, http11c_response *res,
     return 1;
 }
 
-static void h_take(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_take(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject;
     char group[BJM_GROUP_MAX + 1];
@@ -779,12 +770,12 @@ static void h_take(http11c_request *req, http11c_response *res) {
 
     char buf[32];
     snprintf(buf, sizeof buf, "%d", count);
-    http11c_res_header(res, "X-Sukkal-Count", buf);
+    res->header(res->impl, "X-Sukkal-Count", buf);
     res_bj(res, 200, out, out_len);
 }
 
-static void h_job_end(http11c_request *req, http11c_response *res, int done) {
-    app *a = http11c_req_ctx(req);
+static void h_job_end(sukkal_req *req, sukkal_res *res, int done) {
+    sukkal_app *a = req->ctx;
 
     const char *subject;
     char group[BJM_GROUP_MAX + 1];
@@ -836,11 +827,11 @@ static void h_job_end(http11c_request *req, http11c_response *res, int done) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_done(http11c_request *req, http11c_response *res) {
+static void h_done(sukkal_req *req, sukkal_res *res) {
     h_job_end(req, res, 1);
 }
 
-static void h_fail(http11c_request *req, http11c_response *res) {
+static void h_fail(sukkal_req *req, sukkal_res *res) {
     h_job_end(req, res, 0);
 }
 
@@ -855,8 +846,8 @@ static void h_fail(http11c_request *req, http11c_response *res) {
  * an emptiness and not an absence. Both clients used to special-case the
  * 404; this route means neither has to.
  */
-static void h_dead(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_dead(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/dead/");
     if (!subject) return;
@@ -877,8 +868,8 @@ static void h_dead(http11c_request *req, http11c_response *res) {
     }
 
     uint64_t from = query_u64(req, "from", 1);
-    uint64_t max  = query_u64(req, "max", DEFAULT_MAX_BATCH_BYTES);
-    if (max == 0 || max > MAX_BODY_BYTES) max = DEFAULT_MAX_BATCH_BYTES;
+    uint64_t max  = query_u64(req, "max", SUKKAL_DEFAULT_BATCH);
+    if (max == 0 || max > SUKKAL_MAX_BODY_BYTES) max = SUKKAL_DEFAULT_BATCH;
     if (from == 0) from = 1;
 
     int count = 0;
@@ -897,7 +888,7 @@ static void h_dead(http11c_request *req, http11c_response *res) {
         bj_end_array(b);
         out = bj_builder_data(b, &out_len);
         if (!out) { res_err(res, 500, "encode failed\n"); return; }
-        http11c_res_header(res, "X-Sukkal-Count", "0");
+        res->header(res->impl, "X-Sukkal-Count", "0");
         res_bj(res, 200, out, out_len);
         return;
     }
@@ -905,14 +896,14 @@ static void h_dead(http11c_request *req, http11c_response *res) {
 
     char buf[32];
     snprintf(buf, sizeof buf, "%d", count);
-    http11c_res_header(res, "X-Sukkal-Count", buf);
+    res->header(res->impl, "X-Sukkal-Count", buf);
     snprintf(buf, sizeof buf, "%llu", (unsigned long long)last);
-    http11c_res_header(res, "X-Sukkal-Last-Index", buf);
+    res->header(res->impl, "X-Sukkal-Last-Index", buf);
     res_bj(res, 200, out, out_len);
 }
 
-static void h_requeue(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_requeue(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/requeue/");
     if (!subject) return;
@@ -966,8 +957,8 @@ static void h_requeue(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_queues(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_queues(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/queue/");
     if (!subject) return;
@@ -979,8 +970,8 @@ static void h_queues(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_queue_config(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_queue_config(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject;
     char group[BJM_GROUP_MAX + 1];
@@ -997,8 +988,8 @@ static void h_queue_config(http11c_request *req, http11c_response *res) {
     h_queues(req, res);
 }
 
-static void h_queue_delete(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_queue_delete(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject;
     char group[BJM_GROUP_MAX + 1];
@@ -1025,8 +1016,8 @@ static void h_queue_delete(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_policy_get(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_policy_get(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/policy/");
     if (!subject) return;
@@ -1059,8 +1050,8 @@ static void h_policy_get(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_policy_put(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_policy_put(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/policy/");
     if (!subject) return;
@@ -1085,8 +1076,8 @@ static void h_policy_put(http11c_request *req, http11c_response *res) {
     h_policy_get(req, res);
 }
 
-static void h_policy_delete(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_policy_delete(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     const char *subject = subject_of(req, res, "/policy/");
     if (!subject) return;
@@ -1110,8 +1101,8 @@ static void h_policy_delete(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_policies(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_policies(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
     const uint8_t *out = NULL;
     size_t out_len = 0;
     int e = bjm_policy_list(a->store, &out, &out_len);
@@ -1119,11 +1110,11 @@ static void h_policies(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_subjects(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
+static void h_subjects(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
 
     char pattern[BJM_SUBJECT_MAX + 1];
-    int has = http11c_req_query_get(req, "pattern", pattern, sizeof pattern);
+    int has = req->query_get(req->impl, "pattern", pattern, sizeof pattern);
     if (has == 1 && !bjm_pattern_valid(pattern)) {
         res_err(res, 400, "invalid pattern: '.'-separated tokens, '*' for one "
                           "token, '>' for the rest (last only)\n");
@@ -1146,9 +1137,9 @@ static void h_subjects(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_health(http11c_request *req, http11c_response *res) {
-    app *a = http11c_req_ctx(req);
-    const char *backend = http11c_backend();
+static void h_health(sukkal_req *req, sukkal_res *res) {
+    sukkal_app *a = req->ctx;
+    const char *backend = a->backend ? a->backend : "none";
 
     int nsubjects = 0;
     char *names = NULL;
@@ -1168,9 +1159,9 @@ static void h_health(http11c_request *req, http11c_response *res) {
     bj_put_key(b, (const uint8_t *)"subjects", 8);
     bj_put_int(b, nsubjects);
     bj_put_key(b, (const uint8_t *)"connections", 11);
-    bj_put_int(b, http11c_conn_count(a->srv));
+    bj_put_int(b, a->conn_count ? a->conn_count(a->conn_ctx) : 0);
     bj_put_key(b, (const uint8_t *)"uptime_s", 8);
-    bj_put_int(b, (int64_t)(time(NULL) - a->started));
+    bj_put_int(b, (int64_t)(bjm_store_now_ms(a->store) / 1000 - a->started_s));
     bj_put_key(b, (const uint8_t *)"dedup_window_ms", 15);
     bj_put_int(b, (int64_t)bjm_dedup_window(a->store));
     bj_end_object(b);
@@ -1181,7 +1172,7 @@ static void h_health(http11c_request *req, http11c_response *res) {
     res_bj(res, 200, out, out_len);
 }
 
-static void h_not_found(http11c_request *req, http11c_response *res) {
+static void h_not_found(sukkal_req *req, sukkal_res *res) {
     (void)req;
     res_err(res, 404,
         "no such route. available:\n"
@@ -1207,143 +1198,78 @@ static void h_not_found(http11c_request *req, http11c_response *res) {
         "  GET    /health\n");
 }
 
-/* ---- lifecycle ------------------------------------------------------- */
+/* ---- routing ---------------------------------------------------------
+ *
+ * The table IS the protocol, so it lives beside the handlers and compiles
+ * wherever they do. Matching is exact, or a trailing '*' prefix — the whole
+ * of what these routes need, and small enough that owning it costs less
+ * than depending on someone else's.
+ */
 
-static volatile sig_atomic_t g_running = 1;
+static const struct {
+    const char    *method;
+    const char    *path;
+    sukkal_handler fn;
+} ROUTES[] = {
+    { "POST",   "/pub/*",       h_publish        },
+    { "PUT",    "/push/*",      h_push_put       },
+    { "DELETE", "/push",        h_push_delete    },
+    { "GET",    "/push",        h_push_list      },
+    { "GET",    "/sub/*",       h_subscribe      },
+    { "POST",   "/ack/*",       h_ack            },
+    { "POST",   "/trim/*",      h_trim           },
+    { "POST",   "/take/*",      h_take           },
+    { "POST",   "/done/*",      h_done           },
+    { "POST",   "/fail/*",      h_fail           },
+    { "GET",    "/dead/*",      h_dead           },
+    { "POST",   "/requeue/*",   h_requeue        },
+    { "GET",    "/queue/*",     h_queues         },
+    { "PUT",    "/queue/*",     h_queue_config   },
+    { "DELETE", "/queue/*",     h_queue_delete   },
+    { "GET",    "/consumers/*", h_consumers      },
+    { "DELETE", "/consumers/*", h_unsubscribe    },
+    { "GET",    "/info/*",      h_info           },
+    { "GET",    "/policy/*",    h_policy_get     },
+    { "PUT",    "/policy/*",    h_policy_put     },
+    { "DELETE", "/policy/*",    h_policy_delete  },
+    { "GET",    "/policies",    h_policies       },
+    { "GET",    "/subjects",    h_subjects       },
+    { "GET",    "/health",      h_health         },
+};
 
-/* bjm_store_on_publish's hook: the store does not know what a pusher is,
- * and does not need to. */
-static void on_publish(void *ctx, const char *subject, uint64_t index) {
-    app *a = ctx;
-    (void)index;
-    bjm_pusher_notify(a->push, subject);
+static int path_matches(const char *pat, const char *path) {
+    size_t n = strlen(pat);
+    if (pat[n - 1] == '*') return strncmp(path, pat, n - 1) == 0;
+    return strcmp(path, pat) == 0;
 }
 
-static void on_signal(int sig) {
-    (void)sig;
-    g_running = 0;
-    if (g_srv) http11c_stop(g_srv);
+/*
+ * Look up a route, and say whether the PATH matched even when the method
+ * did not — because those are different answers. http11c distinguished
+ * them for us before, with an automatic 405 that never reached the
+ * fallback; owning the table means owning that too, and collapsing both
+ * into 404 would tell a client its URL was wrong when its verb was.
+ */
+static sukkal_handler route_lookup(const char *method, const char *path,
+                                   int *path_matched) {
+    *path_matched = 0;
+    for (size_t i = 0; i < sizeof ROUTES / sizeof *ROUTES; i++) {
+        if (!path_matches(ROUTES[i].path, path)) continue;
+        *path_matched = 1;
+        if (strcmp(method, ROUTES[i].method) == 0) return ROUTES[i].fn;
+    }
+    return NULL;
 }
 
-int bjm_serve(const char *host, int port, const char *dir,
-              uint64_t dedup_window_ms) {
-    app a = {0};
-    a.dir = dir;
-    a.store = bjm_store_open(dir);
-    if (!a.store) {
-        fprintf(stderr, "sukkal: cannot open store at %s\n", dir);
-        return 1;
-    }
-    if (dedup_window_ms) bjm_dedup_set_window(a.store, dedup_window_ms);
-    a.bld = bj_builder_new();
-    if (!a.bld) { bjm_store_free(a.store); return 1; }
+sukkal_handler sukkal_route(const char *method, const char *path) {
+    int matched;
+    return route_lookup(method, path, &matched);
+}
 
-    a.started = time(NULL);
-
-    a.push = bjm_pusher_new(a.store, dir, DEFAULT_MAX_BATCH_BYTES);
-    if (!a.push) {
-        fprintf(stderr, "sukkal: cannot start the delivery engine\n");
-        bj_builder_free(a.bld);
-        bjm_store_free(a.store);
-        return 1;
-    }
-    /* Every append wakes whatever is subscribed to that subject — a
-     * publish, a requeue, a job being dead-lettered, all of them. */
-    bjm_store_on_publish(a.store, on_publish, &a);
-
-    http11c_server *s = http11c_server_new();
-    if (!s) {
-        bjm_pusher_free(a.push);
-        bj_builder_free(a.bld);
-        bjm_store_free(a.store);
-        return 1;
-    }
-    a.srv = s;
-
-    http11c_set_ctx(s, &a);
-    http11c_set_max_body(s, MAX_BODY_BYTES);
-    http11c_set_idle_timeout(s, IDLE_TIMEOUT_SECS);
-
-    http11c_route(s, "POST", "/pub/*", h_publish);
-    http11c_route(s, "PUT",  "/push/*", h_push_put);
-    http11c_route(s, "DELETE", "/push", h_push_delete);
-    http11c_route(s, "GET",  "/push", h_push_list);
-    http11c_route(s, "GET",  "/sub/*", h_subscribe);
-    http11c_route(s, "POST", "/ack/*", h_ack);
-    http11c_route(s, "POST", "/trim/*", h_trim);
-    http11c_route(s, "POST", "/take/*", h_take);
-    http11c_route(s, "POST", "/done/*", h_done);
-    http11c_route(s, "POST", "/fail/*", h_fail);
-    http11c_route(s, "GET",  "/dead/*", h_dead);
-    http11c_route(s, "POST", "/requeue/*", h_requeue);
-    http11c_route(s, "GET",  "/queue/*", h_queues);
-    http11c_route(s, "PUT",  "/queue/*", h_queue_config);
-    http11c_route(s, "DELETE", "/queue/*", h_queue_delete);
-    http11c_route(s, "GET",  "/consumers/*", h_consumers);
-    http11c_route(s, "DELETE", "/consumers/*", h_unsubscribe);
-    http11c_route(s, "GET",  "/info/*", h_info);
-    http11c_route(s, "GET",  "/policy/*", h_policy_get);
-    http11c_route(s, "PUT",  "/policy/*", h_policy_put);
-    http11c_route(s, "DELETE", "/policy/*", h_policy_delete);
-    http11c_route(s, "GET",  "/policies", h_policies);
-    http11c_route(s, "GET",  "/subjects", h_subjects);
-    http11c_route(s, "GET",  "/health", h_health);
-    http11c_set_fallback(s, h_not_found);
-
-    int rc = 0;
-    if (http11c_listen(s, host, port) != 0) {
-        fprintf(stderr, "sukkal: cannot listen on %s:%d\n", host, port);
-        rc = 1;
-        goto done;
-    }
-
-    g_srv = s;
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
-    signal(SIGPIPE, SIG_IGN);
-
-    fprintf(stderr, "sukkal: serving %s on http://%s:%d (%s), "
-                    "%d push subscription(s)\n",
-            dir, host, http11c_port(s), http11c_backend(),
-            bjm_pusher_count(a.push));
-
-    /*
-     * Our own loop rather than http11c_run, because the broker has two
-     * jobs: answering requests and making them. bjm_pusher_pump starts
-     * whatever deliveries are due, services those in flight, and answers
-     * how long we may block before it wants attention again — a couple of
-     * milliseconds mid-delivery, a full second when idle. Retention gets
-     * its sweep from the same loop.
-     */
-    time_t last_sweep = time(NULL);
-    while (g_running) {
-        int wait = bjm_pusher_pump(a.push, bjm_now_ms());
-        if (http11c_poll(s, wait) < 0) { rc = 1; break; }
-
-        time_t now = time(NULL);
-        if (now - last_sweep < RETENTION_SWEEP_SECS) continue;
-        last_sweep = now;
-
-        uint64_t removed = 0;
-        int trimmed = 0;
-        int e = bjm_retention_run(a.store, (uint64_t)now, &removed, &trimmed);
-        if (e)
-            fprintf(stderr, "sukkal: retention sweep failed (%d)\n", e);
-        else if (removed)
-            fprintf(stderr, "sukkal: retention removed %llu message(s) "
-                            "from %d subject(s)\n",
-                    (unsigned long long)removed, trimmed);
-    }
-    fprintf(stderr, "sukkal: stopped\n");
-
-done:
-    g_srv = NULL;
-    /* Before the store: a delivery still in flight would otherwise report
-     * its receipt into freed memory. */
-    bjm_store_on_publish(a.store, NULL, NULL);
-    bjm_pusher_free(a.push);
-    http11c_server_free(s);
-    bj_builder_free(a.bld);
-    bjm_store_free(a.store);
-    return rc;
+void sukkal_dispatch(sukkal_req *req, sukkal_res *res) {
+    int path_matched = 0;
+    sukkal_handler fn = route_lookup(req->method, req->path, &path_matched);
+    if (fn) { fn(req, res); return; }
+    if (path_matched) { res_err(res, 405, "405 Method Not Allowed\n"); return; }
+    h_not_found(req, res);
 }

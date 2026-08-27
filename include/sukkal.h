@@ -18,6 +18,64 @@
 /* The media type carried by every request and success-response body. */
 #define SUKKAL_MEDIA_TYPE "application/binjson"
 
+/* The largest request body accepted, and the default batch a delivery
+ * carries. Protocol facts, not transport ones — a handler enforces both,
+ * so they live with the routing rather than with whatever is listening. */
+#define SUKKAL_MAX_BODY_BYTES   (4u * 1024 * 1024)
+#define SUKKAL_DEFAULT_BATCH    65536u
+
+/* ---- the request seam -------------------------------------------------
+ *
+ * The broker's routing table IS its protocol, so it has exactly one
+ * definition and compiles wherever the store does. What differs between a
+ * native build and a WASM one is only how a request arrives: over a socket
+ * that http11c parsed, or as a direct call from JS with no socket at all.
+ *
+ * Hence a pair of shims rather than http11c's own types. A request is
+ * mostly plain fields — the transport has already parsed them — with one
+ * function pointer for the query string, because parsing that is the
+ * transport's job and http11c does it well. A response is a vtable,
+ * because writing one means something different when there is nobody to
+ * write to but a buffer.
+ */
+
+typedef struct sukkal_req {
+    void       *ctx;            /* the broker app; whatever the host set  */
+    void       *impl;           /* the transport's own request object     */
+    const char *method;
+    const char *path;           /* NUL-terminated, no query string        */
+    const uint8_t *body;
+    size_t      body_len;
+    const char *content_type;   /* NULL when the request carried none     */
+
+    /* 1 when `key` is present and fits, 0 when absent, negative on error. */
+    int (*query_get)(void *impl, const char *key, char *buf, size_t buf_len);
+} sukkal_req;
+
+typedef struct sukkal_res {
+    void *impl;
+    void (*status)(void *impl, int code);
+    void (*header)(void *impl, const char *name, const char *value);
+    void (*write)(void *impl, const uint8_t *data, size_t len);
+} sukkal_res;
+
+typedef void (*sukkal_handler)(sukkal_req *req, sukkal_res *res);
+
+
+/*
+ * The handler for `method` and `path`, or NULL when nothing matches.
+ * Routes are exact or a trailing-'*' prefix, which is the whole of what
+ * this protocol needs.
+ */
+sukkal_handler sukkal_route(const char *method, const char *path);
+
+/*
+ * Route and run, answering 404/405 itself when nothing matches. The one
+ * entry point a transport needs: http11c calls it from a fallback handler,
+ * and a WASM host calls it directly.
+ */
+void sukkal_dispatch(sukkal_req *req, sukkal_res *res);
+
 /*
  * bj_decode calls every visitor callback unconditionally — a NULL member
  * is a segfault, not "skip this type". Start from this and override only
@@ -79,6 +137,11 @@ void bjm_store_free(bjm_store *st);
  * and dedup windows closing rather than doing either at the wrong moment.
  */
 void bjm_store_set_clock(bjm_store *st, uint64_t (*now_ms)(void *ctx), void *ctx);
+
+/* What that clock currently says, or 0 when none was installed. The store
+ * is where the host's clock lives, so anything else that needs the time
+ * asks it rather than growing a second hook. */
+uint64_t bjm_store_now_ms(bjm_store *st);
 
 /*
  * Replace the file named `to` with the one named `from`, atomically.
@@ -316,6 +379,33 @@ void bjm_store_on_publish(bjm_store *st,
 typedef struct bjm_pusher bjm_pusher;
 
 bjm_pusher *bjm_pusher_new(bjm_store *st, const char *dir, uint64_t default_batch_bytes);
+
+/*
+ * What every handler is handed as `req->ctx`. Shared between the routing
+ * half (src/server.c, portable) and whichever transport is driving it
+ * (src/server_posix.c today).
+ *
+ * Nothing here names a transport type. `srv` used to be an
+ * http11c_server*, purely so /health could report a connection count;
+ * asking for the count instead of the server is what lets this header stay
+ * free of a socket library.
+ */
+typedef struct {
+    bjm_store  *store;
+    const char *dir;        /* for listings: bjns has no list(), so the
+                             * host enumerates and passes the names in   */
+    bj_builder *bld;        /* scratch for composing small responses     */
+    bjm_pusher *push;       /* the outbound half: delivery to callbacks  */
+    uint64_t    started_s;  /* wall-clock seconds, for /health's uptime  */
+
+    /* Two facts about the transport that /health reports and the broker
+     * cannot know: what is running it, and how many connections are open.
+     * A WASM host has neither, and says so rather than inventing them. */
+    const char *backend;
+    int       (*conn_count)(void *ctx);
+    void       *conn_ctx;
+} sukkal_app;
+
 void        bjm_pusher_free(bjm_pusher *p);
 int         bjm_pusher_count(const bjm_pusher *p);
 

@@ -283,11 +283,46 @@ Verified: the native binary passes 20/20 Node and 72/72 Python against a
 real broker, and `subjects`, its pattern filter, the `/health` count and
 `trim` — the four routes whose implementation changed — behave as before.
 
-### Phase 2 — the request seam
+### Phase 2 — the request seam ✅
 
 `sukkal_req`/`sukkal_res`, http11c behind them, `server.c` untouched below the
 accessors. Exit: the native binary behaves identically, and `server.c` no
 longer includes `http11c.h`.
+
+**Done.** `server.c` includes `sukkal.h`, `binjson.h`, `<stdlib.h>` and
+`<string.h>`, and compiles under `emcc` to a 43KB object. Its 124 `http11c_`
+references are gone; `src/server_posix.c` holds the socket half.
+
+A request is mostly plain fields — the transport parsed them already — with
+one function pointer for the query string, because parsing that is the
+transport's job and http11c does it well. A response is a vtable, because
+"write" means something different when there is nobody to write to but a
+buffer.
+
+What the plan did not say, and should have: **the routing table had to move
+too.** All 24 routes were registered with http11c's router, which meant the
+transport decided what this broker answers to. They are a static table in
+`server.c` now, and http11c gets a single fallback that adapts the request
+and calls `sukkal_dispatch`. That is what makes
+`sukkal_request(method, path, body)` possible at all — the protocol is no
+longer defined by the thing carrying it.
+
+Three smaller things followed:
+
+  - **/health reported two facts only a transport knows** — the event
+    backend and the open connection count. They are fields on the app now,
+    filled by whoever is serving; a WASM host has neither and says `"none"`
+    and `0` rather than inventing them.
+  - **`MAX_BODY_BYTES` and the default batch size are protocol limits**, not
+    transport ones — a handler enforces both — so they moved to the header,
+    while the idle timeout and the retention sweep interval stayed with the
+    socket.
+  - **A 405 was nearly lost.** http11c answers a matched path with an
+    unmatched method automatically, and never reaches the fallback; a
+    hand-rolled table collapses that into 404 unless it is careful, telling
+    a client its URL was wrong when its verb was. No test covered it — both
+    client suites passed with the bug in — so it was found by asking what
+    http11c had been doing for us rather than by running anything.
 
 ### Phase 3 — the push seam
 
